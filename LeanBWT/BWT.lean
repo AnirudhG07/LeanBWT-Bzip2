@@ -1,60 +1,118 @@
-import Init.Data.List.Sort.Basic
+import Mathlib
 
 namespace LeanBWT
 
-variable {α : Type} [Ord α] [Inhabited α] [DecidableEq α]
+set_option autoImplicit false
 
-/-- Lexicographic sorting of rows (lists) for the BWT matrix. -/
-def sortRows (rows : List (List α)) : List (List α) :=
-  rows.mergeSort (fun a b => compare a b != Ordering.gt)
+variable {α : Type} [LinearOrder α] [DecidableEq α]
+
+abbrev Symbol (α : Type) := WithBot α
+
+instance symbolLinearOrder : LinearOrder (Symbol α) := inferInstance
+instance symbolDecidableEq : DecidableEq (Symbol α) := inferInstance
+
+/-- Append a unique minimal sentinel (`⊥`) to the end of the text. -/
+def withSentinel (xs : List α) : List (Symbol α) :=
+  xs.map (fun x => (x : Symbol α)) ++ [⊥]
+
+/-- Lexicographic `≤` as a boolean comparator for merge sort. -/
+def lexLE {β : Type} [LinearOrder β] : List β → List β → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | x :: xs, y :: ys =>
+      if x < y then
+        true
+      else if y < x then
+        false
+      else
+        lexLE xs ys
+
+/-- Stable lexicographic sorting of rows. -/
+def sortRows (rows : List (List (Symbol α))) : List (List (Symbol α)) :=
+  rows.mergeSort lexLE
 
 /-- Cyclic left rotation by `k` positions. -/
-def rotateLeft (xs : List α) (k : Nat) : List α :=
+def rotateLeft {β : Type} (xs : List β) (k : Nat) : List β :=
   let n := xs.length
   let k' := k % n
   xs.drop k' ++ xs.take k'
 
-/-- All cyclic rotations of a list. For `[]`, we use `[[]]`. -/
-def rotations (xs : List α) : List (List α) :=
-  match xs with
-  | [] => [[]]
-  | _ => (List.range xs.length).map (fun i => rotateLeft xs i)
+/-- All cyclic rotations of the sentinel-augmented text. -/
+@[simp, grind .]
+def rotations (xs : List α) : List (List (Symbol α)) :=
+  let ys := withSentinel xs
+  (List.range ys.length).map (fun i => rotateLeft ys i)
 
 /-- The sorted BWT matrix. -/
-def bwtmatrix (xs : List α) : List (List α) :=
+@[simp, grind .]
+def bwtmatrix (xs : List α) : List (List (Symbol α)) :=
   sortRows (rotations xs)
 
-/-- Last column of the matrix. -/
-def lastColumn (rows : List (List α)) : List α :=
-  rows.map (fun row => row.getLastD default)
+/-- Last column of the BWT matrix. -/
+@[simp, grind .]
+def lastColumn (rows : List (List (Symbol α))) : List (Symbol α) :=
+  rows.map (fun row => row.getLastD ⊥)
 
-/-- Primary index (row index of original input in sorted matrix). -/
-def primaryIndex (xs : List α) : Nat :=
+/-- Sort symbols to reconstruct the first column from the last column. -/
+@[simp, grind .]
+def firstColumn (last : List (Symbol α)) : List (Symbol α) :=
+  last.mergeSort (fun a b => decide (a ≤ b))
+
+/-- Number of occurrences of `c` in `xs[0:i)`. -/
+def occBefore (xs : List (Symbol α)) (i : Nat) (c : Symbol α) : Nat :=
+  (xs.take i).count c
+
+/-- LF-step formula (index-level first/last correspondence helper). -/
+@[simp, grind .]
+def lfStep (last : List (Symbol α)) (i : Nat) : Nat :=
+  let c := last.getD i ⊥
+  let k := occBefore last i c
+  let first := firstColumn last
+  first.idxOfNth c k
+
+/-- Structured BWT output. -/
+structure BWTResult (α : Type) where
+  original : List α
+  last : List (Symbol α)
+  primary : Nat
+  deriving Repr
+
+/-- Forward Burrows-Wheeler transform. -/
+@[simp, grind .]
+def transform (xs : List α) : BWTResult α :=
   let rows := bwtmatrix xs
-  rows.findIdx (fun row => decide (row = xs))
+  let s := withSentinel xs
+  {
+    original := xs
+    last := lastColumn rows
+    primary := rows.findIdx (fun row => decide (row = s))
+  }
 
-/-- Forward Burrows-Wheeler transform (last column + primary index). -/
-def transform (xs : List α) : List α × Nat :=
-  let rows := bwtmatrix xs
-  (lastColumn rows, rows.findIdx (fun row => decide (row = xs)))
+/-- Inverse Burrows-Wheeler transform API. -/
+def lfCollect (last : List (Symbol α)) : Nat → Nat → List (Symbol α)
+  | 0, _ => []
+  | Nat.succ k, j =>
+      let j' := lfStep last j
+      last.getD j' ⊥ :: lfCollect last k j'
 
-/-- One inverse-BWT refinement step: prefix with last-column symbols, then re-sort. -/
-def inverseStep (last : List α) (table : List (List α)) : List (List α) :=
-  let prefixed := List.zipWith (fun c row => c :: row) last table
-  sortRows prefixed
+/-- Remove the unique sentinel from decoded symbols. -/
+def stripSentinel (xs : List (Symbol α)) : List α :=
+  xs.filterMap id
 
-/-- Iteratively reconstruct the table from the BWT last column. -/
-def buildTable (last : List α) : Nat → List (List α)
-  | 0 => List.replicate last.length []
-  | n + 1 => inverseStep last (buildTable last n)
+/-- Algorithmic inverse from `(last, primary)` using LF traversal. -/
+def inverseFromLast (last : List (Symbol α)) (primary : Nat) : List α :=
+  stripSentinel ((lfCollect last last.length primary).reverse)
 
-/-- Inverse Burrows-Wheeler transform. -/
-def inverse (last : List α) (primary : Nat) : List α :=
-  let table := buildTable last last.length
-  table.getD primary []
+/-- Algorithmic inverse on structured BWT payload. -/
+def inverseAlgorithmic (r : BWTResult α) : List α :=
+  inverseFromLast r.last r.primary
 
-/-- A simple run-length encoding. -/
-def rleAux (current : α) (count : Nat) : List α → List (α × Nat)
+/-- Inverse Burrows-Wheeler transform API. -/
+def inverse (r : BWTResult α) : List α :=
+  inverseAlgorithmic r
+
+/-- Run-length encoding helper. -/
+def rleAux {β : Type} [DecidableEq β] (current : β) (count : Nat) : List β → List (β × Nat)
   | [] => [(current, count)]
   | y :: ys =>
       if y = current then
@@ -62,29 +120,35 @@ def rleAux (current : α) (count : Nat) : List α → List (α × Nat)
       else
         (current, count) :: rleAux y 1 ys
 
-/-- A simple run-length encoding. -/
-def rleEncode : List α → List (α × Nat)
+/-- Run-length encoding. -/
+def rleEncode {β : Type} [DecidableEq β] : List β → List (β × Nat)
   | [] => []
   | x :: xs => rleAux x 1 xs
 
-/-- Decode run-length encoded data. -/
-def rleDecode : List (α × Nat) → List α
+/-- Run-length decoding. -/
+def rleDecode {β : Type} : List (β × Nat) → List β
   | [] => []
   | (x, n) :: rest => List.replicate n x ++ rleDecode rest
 
-/-- BWT payload suitable for later entropy coding (e.g. Huffman). -/
-structure Compressed (α : Type _) where
-  payload : List (α × Nat)
-  primary : Nat
+/-- Compressed payload with BWT metadata plus RLE payload. -/
+structure Compressed (α : Type) where
+  bwt : BWTResult α
+  payload : List (Symbol α × Nat)
   deriving Repr
 
-/-- Compression: BWT + RLE on the BWT output column. -/
+/-- Compression: BWT then RLE on the BWT last column. -/
+@[simp, grind .]
 def compress (xs : List α) : Compressed α :=
-  let (last, primary) := transform xs
-  { payload := rleEncode last, primary := primary }
+  let b := transform xs
+  { bwt := b, payload := rleEncode b.last }
 
-/-- Decompression: RLE decode + inverse BWT. -/
+/-- Decompression: decode payload, verify column, then inverse. -/
+@[simp, grind .]
 def decompress (c : Compressed α) : List α :=
-  inverse (rleDecode c.payload) c.primary
+  let decoded := rleDecode c.payload
+  if decoded = c.bwt.last then
+    inverse c.bwt
+  else
+    []
 
 end LeanBWT
