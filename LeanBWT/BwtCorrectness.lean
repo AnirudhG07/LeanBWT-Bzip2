@@ -313,24 +313,194 @@ lemma last_getD_shiftRowIdx (xs : List α) (k : Nat) :
     _ = ys.getD ((k' + n - 1) % n) ⊥ := by simp [ys, n, withSentinel_length]
     _ = ys.getD ((k % n + n - 1) % n) ⊥ := by simp [k']
 
-lemma tagF_shiftRowIdx_prev_eq_tagL_shiftRowIdx
-    (xs : List α) (k : Nat) :
-    let n := xs.length + 1
-    let k' := k % n
-    let L := (transform xs).last
-    tagF L (shiftRowIdx xs ((k' + n - 1) % n)) =
-      tagL L (shiftRowIdx xs k') := by
-  -- first components: both are the same predecessor symbol
-  apply Prod.ext
-  ·
-    -- this is exactly your `hFj.trans hLi.symm`
-    simp_all [tagF, tagL]
 
-    sorry
-  ·
-    -- hard part:
-    -- the predecessor map preserves the occurrence rank inside the `c`-block
-    sorry
+lemma lexLE_eq_true_iff_le (l₁ l₂ : List (Symbol α)) :
+    lexLE l₁ l₂ = true ↔ l₁ ≤ l₂ := by
+  induction l₁ generalizing l₂ with
+  | nil =>
+      cases l₂ with
+      | nil =>
+          simp [lexLE]
+      | cons b l₂ =>
+          constructor
+          · intro _
+            exact le_of_lt (by simp)
+          · intro _
+            simp [lexLE]
+  | cons a l₁ ih =>
+      cases l₂ with
+      | nil =>
+          simp [lexLE]
+      | cons b l₂ =>
+          by_cases hab : a < b
+          · constructor
+            · intro _
+              exact le_of_lt (by simp [List.cons_lt_cons_iff, hab])
+            · intro _
+              simp [lexLE, hab]
+          · by_cases hba : b < a
+            · constructor
+              · intro htrue
+                simp [lexLE, hab, hba] at htrue
+              · intro hle
+                exfalso
+                rcases (le_iff_lt_or_eq).1 hle with hlt | heq
+                · rcases (List.cons_lt_cons_iff).1 hlt with hab' | ⟨habEq, _⟩
+                  · exact hab hab'
+                  · exact lt_irrefl _ (habEq ▸ hba)
+                · injection heq with habEq
+                  exact lt_irrefl _ (habEq ▸ hba)
+            · have habEq : a = b := le_antisymm (le_of_not_gt hba) (le_of_not_gt hab)
+              subst habEq
+              simpa [lexLE, hab, hba, le_iff_lt_or_eq, List.cons_lt_cons_iff] using ih l₂
+
+lemma lexLE_trans (l₁ l₂ l₃ : List (Symbol α)) :
+    lexLE l₁ l₂ = true → lexLE l₂ l₃ = true → lexLE l₁ l₃ = true := by
+  intro h12 h23
+  have h12' : l₁ ≤ l₂ := (lexLE_eq_true_iff_le _ _).1 h12
+  have h23' : l₂ ≤ l₃ := (lexLE_eq_true_iff_le _ _).1 h23
+  exact (lexLE_eq_true_iff_le _ _).2 (le_trans h12' h23')
+
+lemma lexLE_total (l₁ l₂ : List (Symbol α)) :
+    lexLE l₁ l₂ = true ∨ lexLE l₂ l₁ = true := by
+  by_cases h : l₁ ≤ l₂
+  · exact Or.inl ((lexLE_eq_true_iff_le _ _).2 h)
+  · exact Or.inr ((lexLE_eq_true_iff_le _ _).2 (le_of_not_ge h))
+
+lemma head_getD_le_of_le (r s : List (Symbol α)) :
+    r ≤ s → r.getD 0 ⊥ ≤ s.getD 0 ⊥ := by
+  intro h
+  cases r with
+  | nil =>
+      simp
+  | cons a rs =>
+      cases s with
+      | nil =>
+          have : False := by
+            rcases (le_iff_lt_or_eq).1 h with hlt | heq
+            · simp at hlt
+            · cases heq
+          exact this.elim
+      | cons b ss =>
+          have hab : a ≤ b := by
+            rcases (le_iff_lt_or_eq).1 h with hlt | heq
+            · exact List.head_le_of_lt hlt
+            · cases heq
+              exact le_rfl
+          simp_all
+
+lemma first_symbol_of_shift (xs : List α) (i : Nat) :
+    let ys := withSentinel xs
+    (rotateLeft ys i).getD 0 ⊥ = ys.getD (i % ys.length) ⊥ := by
+  let ys := withSentinel xs
+  have hlen : 0 < ys.length := by
+    simp [ys, withSentinel]
+  calc
+    (rotateLeft ys i).getD 0 ⊥ = ((ys.rotate i)[0]?).getD ⊥ := by
+      simp [ys, rotateLeft_eq_rotate, List.getD_eq_getElem?_getD]
+    _ = ((ys[(0 + i) % ys.length]?).getD ⊥) := by
+      rw [List.getElem?_rotate (l := ys) (n := i) (m := 0) hlen]
+    _ = ys.getD ((0 + i) % ys.length) ⊥ := by
+      simp [List.getD]
+    _ = ys.getD (i % ys.length) ⊥ := by
+      simp
+
+lemma rotations_heads_eq_withSentinel (xs : List α) :
+    (rotations xs).map (fun row => row.getD 0 ⊥) = withSentinel xs := by
+  let ys := withSentinel xs
+  apply List.ext_getElem
+  · simp [rotations]
+  · intro i hi₁ hi₂
+    have hi : i < ys.length := by
+      simpa [rotations, ys] using hi₁
+    calc
+      ((rotations xs).map (fun row => row.getD 0 ⊥))[i]
+          = (rotateLeft ys i).getD 0 ⊥ := by
+              simp [rotations, ys]
+      _ = ys.getD (i % ys.length) ⊥ := by
+            simpa [ys] using (first_symbol_of_shift (xs := xs) i)
+      _ = ys.getD i ⊥ := by
+            simp [Nat.mod_eq_of_lt hi]
+      _ = ys[i] := by
+            simpa using (List.getD_eq_getElem (l := ys) (d := (⊥ : Symbol α)) (hn := hi))
+
+lemma rotations_lastColumn_eq_rotate (xs : List α) :
+    lastColumn (rotations xs) = (withSentinel xs).rotate xs.length := by
+  let ys := withSentinel xs
+  apply List.ext_getElem
+  · simp [lastColumn, rotations]
+  · intro i hi₁ hi₂
+    have hi : i < ys.length := by
+      simpa [lastColumn, rotations, ys] using hi₁
+    have hmod : ((i + ys.length - 1) % ys.length) < ys.length := by
+      exact Nat.mod_lt _ (by simp [ys, withSentinel])
+    calc
+      (lastColumn (rotations xs))[i]
+          = (rotateLeft ys i).getLastD ⊥ := by
+              simp [lastColumn, rotations, ys]
+      _ = ys.getD ((i + ys.length - 1) % ys.length) ⊥ := by
+            simpa [ys] using (last_symbol_of_shift (xs := xs) i)
+      _ = ys[((i + ys.length - 1) % ys.length)] := by
+            simpa using (List.getD_eq_getElem (l := ys) (d := (⊥ : Symbol α)) (hn := hmod))
+      _ = (ys.rotate xs.length)[i] := by
+            rw [List.getElem_rotate ys xs.length i hi₂]
+            simp [ys, withSentinel_length]
+
+lemma rotations_lastColumn_perm_withSentinel (xs : List α) :
+    List.Perm (lastColumn (rotations xs)) (withSentinel xs) := by
+  rw [rotations_lastColumn_eq_rotate]
+  exact List.rotate_perm (withSentinel xs) xs.length
+
+lemma matrixHeads_sorted (xs : List α) :
+    ((bwtmatrix xs).map (fun row => row.getD 0 ⊥)).SortedLE := by
+  let r : List (Symbol α) → List (Symbol α) → Prop := fun row₁ row₂ => lexLE row₁ row₂ = true
+  let _ : Std.Total r := ⟨fun a b => by
+    rcases lexLE_total a b with hab | hba
+    · exact Or.inl hab
+    · exact Or.inr hba⟩
+  let _ : IsTrans (List (Symbol α)) r := ⟨fun a b c hab hbc => lexLE_trans _ _ _ hab hbc⟩
+  have hpairRows : (bwtmatrix xs).Pairwise r := by
+    simpa [bwtmatrix, sortRows, r] using
+      (List.pairwise_mergeSort' (r := r) (l := rotations xs))
+  have hpairHeads : ((bwtmatrix xs).map (fun row => row.getD 0 ⊥)).Pairwise (· ≤ ·) := by
+    refine hpairRows.map (fun row => row.getD 0 ⊥) ?_
+    intro row₁ row₂ hrows
+    exact head_getD_le_of_le _ _ ((lexLE_eq_true_iff_le _ _).1 hrows)
+  exact hpairHeads.sortedLE
+
+lemma matrixHeads_perm_withSentinel (xs : List α) :
+    List.Perm ((bwtmatrix xs).map (fun row => row.getD 0 ⊥)) (withSentinel xs) := by
+  rw [← rotations_heads_eq_withSentinel]
+  simpa [bwtmatrix, sortRows] using
+    (List.Perm.map
+      (f := fun row : List (Symbol α) => row.getD 0 (⊥ : Symbol α))
+      (List.mergeSort_perm (rotations xs) lexLE))
+
+lemma transform_last_perm_withSentinel (xs : List α) :
+    List.Perm (transform xs).last (withSentinel xs) := by
+  have hperm :
+      List.Perm (lastColumn (bwtmatrix xs)) (lastColumn (rotations xs)) := by
+    simpa [lastColumn, bwtmatrix, sortRows] using
+      (List.Perm.map
+        (f := fun row : List (Symbol α) => row.getLastD (⊥ : Symbol α))
+        (List.mergeSort_perm (rotations xs) lexLE))
+  exact by
+    simpa [transform] using hperm.trans (rotations_lastColumn_perm_withSentinel xs)
+
+lemma firstColumn_eq_matrixHeads (xs : List α) :
+    firstColumn (transform xs).last =
+      (bwtmatrix xs).map (fun row => row.getD 0 ⊥) := by
+  have hperm :
+      List.Perm (firstColumn (transform xs).last)
+        ((bwtmatrix xs).map (fun row => row.getD 0 ⊥)) := by
+    exact (firstColumn_perm _).trans <|
+      (transform_last_perm_withSentinel xs).trans <|
+        (matrixHeads_perm_withSentinel xs).symm
+  have hsortedFirst : (firstColumn (transform xs).last).SortedLE := by
+    simpa [firstColumn] using (List.sortedLE_mergeSort (l := (transform xs).last))
+  have hsortedHeads : ((bwtmatrix xs).map (fun row => row.getD 0 ⊥)).SortedLE :=
+    matrixHeads_sorted xs
+  exact hperm.eq_of_sortedLE hsortedFirst hsortedHeads
 
 
 lemma first_getD_shiftRowIdx (xs : List α) (k : Nat) :
@@ -369,11 +539,82 @@ lemma first_getD_shiftRowIdx (xs : List α) (k : Nat) :
   have hfirst :
       (firstColumn (transform xs).last).getD (shiftRowIdx xs k') ⊥ =
         ((bwtmatrix xs).getD (shiftRowIdx xs k') []).getD 0 ⊥ := by
-      simp_all
-      sorry
-    -- grind [transform, firstColumn, lastColumn, bwtmatrix, sortRows, firstColumn_perm,
-      -- rotations_nodup, bwtmatrix_get_shiftRowIdx, last_getD_shiftRowIdx]
+    calc
+      (firstColumn (transform xs).last).getD (shiftRowIdx xs k') ⊥
+          = (((bwtmatrix xs).map (fun row => row.getD 0 ⊥)).getD (shiftRowIdx xs k') ⊥) := by
+              simpa using
+                congrArg
+                  (fun l : List (Symbol α) => l.getD (shiftRowIdx xs k') ⊥)
+                  (firstColumn_eq_matrixHeads (xs := xs))
+      _ = ((bwtmatrix xs).getD (shiftRowIdx xs k') []).getD 0 ⊥ := by
+            simpa using
+              (List.getD_map
+                (f := fun row : List (Symbol α) => row.getD 0 (⊥ : Symbol α))
+                (l := bwtmatrix xs)
+                (n := shiftRowIdx xs k')
+                (d := []))
   grind only
+
+
+/--
+  Symbol matching: (firstColumn L)[j] = head(Rows[j]).
+-/
+lemma first_symbol_eq_last_symbol (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    let k' := k % n
+    let L := (transform xs).last
+    (firstColumn L).getD (shiftRowIdx xs ((k' + n - 1) % n)) ⊥ = L.getD (shiftRowIdx xs k') ⊥ := by
+  let n := xs.length + 1
+  let k' := k % n
+  let bwt := transform xs
+  let L := bwt.last
+  let ys := withSentinel xs
+
+  -- 1. L[i] = T[(k'+n-1)%n]
+  have hLi : L.getD (shiftRowIdx xs k') ⊥ = ys.getD ((k' + n - 1) % n) ⊥ := by
+    grind [last_getD_shiftRowIdx]
+
+  -- 2. F[j] = T[(k'+n-1)%n]
+  let j := shiftRowIdx xs ((k' + n - 1) % n)
+  have hFj : (firstColumn L).getD j ⊥ = ys.getD ((k' + n - 1) % n) ⊥ := by
+    grind [first_getD_shiftRowIdx]
+  grind
+
+/--
+  Rank matching:
+  Since mergeSort is stable and lexicographical comparison c::S1 < c::S2 <-> S1 < S2,
+  the rank of 'c' in the last column maps perfectly to the rank of 'c' in the first column.
+-/
+theorem rank_matching (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    let k' := k % n
+    let L := (transform xs).last
+    let i := shiftRowIdx xs k'
+    let j := shiftRowIdx xs ((k' + n - 1) % n)
+    rankF L j = rankL L i := by
+  let n := xs.length + 1
+  let k' := k % n
+  let L := (transform xs).last
+  let i := shiftRowIdx xs k'
+  let j := shiftRowIdx xs ((k' + n - 1) % n)
+  let c := L.getD i ⊥
+
+  sorry
+  -- have hLF : LF L i = j := by
+  --   grind [LF_of_shiftRowIdx]
+  -- have hTag := tagF_LF_eq_tagL L i (by
+  --   grind [last_of_shiftRowIdx]
+  -- )
+  -- grind [last_of_shiftRowIdx]
+
+theorem tagF_shiftRowIdx_prev_eq_tagL_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    let k' := k % n
+    let L := (transform xs).last
+    tagF L (shiftRowIdx xs ((k' + n - 1) % n)) = tagL L (shiftRowIdx xs k') := by
+  apply Prod.ext
+  · exact first_symbol_eq_last_symbol xs k
+  · exact rank_matching xs k
 
 theorem LF_of_shiftRowIdx (xs : List α) (k : Nat) :
     let n := xs.length + 1
@@ -451,17 +692,11 @@ lemma lfCollectIdx_step (k' n c i : Nat)
           rw [hsimpl, hmod]
           have hmul : m * (c + 2) = m * (c + 1) + m := by
             rw [show c + 2 = (c + 1) + 1 by omega, Nat.mul_add, Nat.mul_one]
-          have hs :
-              Nat.succ k + i + m * (c + 2) =
-                k + i + m * (c + 1) + (m + 1) := by
-            rw [hmul]
-            omega
           calc
             (k + i + m * (c + 1)) % (m + 1)
                 = (k + i + m * (c + 1) + (m + 1)) % (m + 1) := by
                     rw [Nat.add_mod_right]
-            _ = (Nat.succ k + i + m * (c + 2)) % (m + 1) := by
-                  rw [hs]
+            _ = (Nat.succ k + i + m * (c + 2)) % (m + 1) := by grind
 
 lemma lfCollectIdx_last (k' n c : Nat)
     (hn : 0 < n) (hk : k' < n) :
@@ -475,59 +710,32 @@ lemma lfCollectIdx_last (k' n c : Nat)
       cases k' with
       | zero =>
           have hsimpl : (0 + (m + 1) - 1 : Nat) = m := by
-            omega
+            grind
           have hmod : m % (m + 1) = m := by
             exact Nat.mod_eq_of_lt (Nat.lt_succ_self m)
-          have hsimpl' : (m + (m + 1) - 1 : Nat) = m + m := by
-            omega
-          rw [hsimpl, hmod, hsimpl']
-          have hmul : m * (c + 2) = m * (c + 1) + m := by
-            rw [show c + 2 = (c + 1) + 1 by omega, Nat.mul_add, Nat.mul_one]
-          have hmul' : m * (c + 1) = m * c + m := by
-            rw [Nat.mul_add, Nat.mul_one]
-          have hs : c + m * (c + 2) = (m + m) + (m + 1) * c := by
-            grind
+          rw [hsimpl, hmod]
           calc
             ((m + m) % (m + 1))
                 = (((m + m) + (m + 1) * c) % (m + 1)) := by
                     rw [Nat.add_mul_mod_self_left]
-            _ = (c + m * (c + 2)) % (m + 1) := by
-                  rw [hs]
+            _ = (c + m * (c + 2)) % (m + 1) := by grind
             _ = (0 + c + m * (c.succ + 1)) % (m + 1) := by
                   simp [Nat.succ_eq_add_one, Nat.add_left_comm, Nat.add_comm]
       | succ k =>
           have hk' : k < m + 1 := Nat.lt_of_succ_lt hk
-          have hsimpl : (k + (m + 1) - 1 : Nat) = k + m := by
-            omega
           have hmod : (Nat.succ k + m) % (m + 1) = k := by
-            have hsum : Nat.succ k + m = k + (m + 1) := by
-              omega
             calc
-              (Nat.succ k + m) % (m + 1) = (k + (m + 1)) % (m + 1) := by
-                rw [hsum]
+              (Nat.succ k + m) % (m + 1) = (k + (m + 1)) % (m + 1) := by grind
               _ = k % (m + 1) := by rw [Nat.add_mod_right]
               _ = k := Nat.mod_eq_of_lt hk'
-          have hmod' : ((k + 1 + (m + 1) - 1) % (m + 1)) = k := by
-            have hsimpl0 : (k + 1 + (m + 1) - 1 : Nat) = Nat.succ k + m := by
-              omega
-            rw [hsimpl0, hmod]
-          rw [hmod', hsimpl]
-          have hmul : m * (c + 2) = m * (c + 1) + m := by
-            rw [show c + 2 = (c + 1) + 1 by omega, Nat.mul_add, Nat.mul_one]
-          have hmul' : m * (c + 1) = m * c + m := by
-            rw [Nat.mul_add, Nat.mul_one]
-          have hs :
-              Nat.succ k + c + m * (c + 2) = (k + m) + (m + 1) * (c + 1) := by
-            rw [hmul, hmul', Nat.add_mul, Nat.one_mul]
-            omega
+          simp_all only [lt_add_iff_pos_left, Order.lt_add_one_iff, zero_le, Order.add_one_le_iff,
+            Nat.add_succ_sub_one, Nat.succ_eq_add_one]
           calc
             ((k + m) % (m + 1))
                 = (((k + m) + (m + 1) * (c + 1)) % (m + 1)) := by
                     rw [Nat.add_mul_mod_self_left]
-            _ = (Nat.succ k + c + m * (c + 2)) % (m + 1) := by
-                  rw [hs]
-            _ = (k + 1 + c + m * (c.succ + 1)) % (m + 1) := by
-                  simp [Nat.succ_eq_add_one, Nat.add_left_comm, Nat.add_comm]
+            _ = (Nat.succ k + c + m * (c + 2)) % (m + 1) := by grind
+            _ = (k + 1 + c + m * (c.succ + 1)) % (m + 1) := by grind
 
 /-- Induction lemma: `lfCollect` correctly traverses the string backward. -/
 lemma lfCollect_eq_reverse_take (xs : List α) (c : Nat) (k : Nat) :
