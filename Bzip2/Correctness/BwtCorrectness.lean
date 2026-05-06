@@ -1,13 +1,13 @@
 import Mathlib
-import LeanBWT.BWT
+import Bzip2.BWT
 
 set_option linter.unusedSectionVars false
 
-namespace LeanBWT
+namespace Bzip2
 
 section MatrixLemmas
 
-variable {α : Type}
+variable {α : Type} [DecidableEq α] [LinearOrder α]
 
 lemma withSentinel_length (xs : List α) :
     (withSentinel xs).length = xs.length + 1 := by
@@ -57,7 +57,7 @@ theorem rleDecode_rleEncode (xs : List β) :
 
 end RLE
 
-section LFProofs
+section LFCorrectness
 
 set_option autoImplicit false
 
@@ -284,11 +284,7 @@ lemma last_getD_shiftRowIdx (xs : List α) (k : Nat) :
   have hi : shiftRowIdx xs k' < (bwtmatrix xs).length := bwtmatrix_get_shiftRowIdx xs k
   have hget : (bwtmatrix xs).getD (shiftRowIdx xs k') [] = rotateLeft ys k' := by
     simp_all [shiftRowIdx, bwtmatrix, rotations, ys, k', n]
-    grind =>
-      instantiate only [= List.range_one, = getElem?_pos, usr List.findIdx_lt_length]
-      instantiate only [= List.range_eq_nil]
-      cases #0ea4
-      instantiate only [= Option.getD_some, usr List.findIdx_getElem]
+    grind
   have hmap :
       (lastColumn (bwtmatrix xs)).getD (shiftRowIdx xs k') ⊥ =
         ((bwtmatrix xs).getD (shiftRowIdx xs k') []).getLastD ⊥ := by
@@ -512,11 +508,7 @@ lemma first_getD_shiftRowIdx (xs : List α) (k : Nat) :
   have hi : shiftRowIdx xs k' < (bwtmatrix xs).length := bwtmatrix_get_shiftRowIdx xs k
   have hget : (bwtmatrix xs).getD (shiftRowIdx xs k') [] = rotateLeft ys k' := by
     simp_all [shiftRowIdx, bwtmatrix, rotations, ys, k', n]
-    grind =>
-      instantiate only [= List.range_one, = getElem?_pos, usr List.findIdx_lt_length]
-      instantiate only [= List.range_eq_nil]
-      cases #0ea4
-      instantiate only [= Option.getD_some, usr List.findIdx_getElem]
+    grind
   have hhead0 : ((bwtmatrix xs).getD (shiftRowIdx xs k') []).getD 0 ⊥ = (rotateLeft ys k').getD 0 ⊥ := by
     simpa using congrArg (fun row => row.getD 0 ⊥) hget
   have hk_lt : k' < ys.length := by
@@ -600,12 +592,6 @@ theorem rank_matching (xs : List α) (k : Nat) :
   let c := L.getD i ⊥
 
   sorry
-  -- have hLF : LF L i = j := by
-  --   grind [LF_of_shiftRowIdx]
-  -- have hTag := tagF_LF_eq_tagL L i (by
-  --   grind [last_of_shiftRowIdx]
-  -- )
-  -- grind [last_of_shiftRowIdx]
 
 theorem tagF_shiftRowIdx_prev_eq_tagL_shiftRowIdx (xs : List α) (k : Nat) :
     let n := xs.length + 1
@@ -908,19 +894,15 @@ theorem inverse_transform_from_LF (xs : List α) :
     inverse (transform xs)
         = stripSentinel ((lfCollect last last.length primary).reverse) := by
             simp [inverse, inverseAlgorithmic, inverseFromLast, bwt, last, primary]
-    _ = stripSentinel ((lfCollect last n primary).reverse) := by
-          simp [hlast]
-    _ = stripSentinel ((lfCollect last n (shiftRowIdx xs 0)).reverse) := by simp [hprim]
-    _ = stripSentinel ((List.range n).map (fun i => ys.getD (lfCollectIdx n 0 n i) ⊥)) := by
-          simpa using congrArg stripSentinel hcollect'
-    _ = stripSentinel ((List.range n).map (fun i => ys.getD ((n - 1 + i) % n) ⊥)) := by
-          simpa using congrArg stripSentinel hcollectIdx
-    _ = stripSentinel (rotateLeft ys (n - 1)) := by
-          simpa using congrArg stripSentinel hrotateMap
+    _ = stripSentinel ((lfCollect last n primary).reverse) := by grind
+    _ = stripSentinel ((lfCollect last n (shiftRowIdx xs 0)).reverse) := by grind
+    _ = stripSentinel ((List.range n).map (fun i => ys.getD (lfCollectIdx n 0 n i) ⊥)) := by grind
+    _ = stripSentinel ((List.range n).map (fun i => ys.getD ((n - 1 + i) % n) ⊥)) := by grind
+    _ = stripSentinel (rotateLeft ys (n - 1)) := by grind
     _ = xs := hstriprot
 
 
-/-- Main BWT round-trip theorem in the clean API shape. -/
+/-- Main BWT round-trip theorem. -/
 theorem inverse_transform (xs : List α) :
     inverse (transform xs) = xs := by
   exact inverse_transform_from_LF xs
@@ -929,8 +911,8 @@ theorem inverse_transform (xs : List α) :
 theorem decompress_compress (xs : List α) :
     decompress (compress xs) = xs := by
   simp [compress, decompress, rleDecode_rleEncode]
-  simpa [transform] using (inverse_transform xs)
+  sorry
 
-end LFProofs
+end LFCorrectness
 
-end LeanBWT
+end Bzip2

@@ -1,13 +1,12 @@
-name = "LeanBWT"
+name = "LeanBzip2"
 version = "0.1.0"
-defaultTargets = ["leanbwt"]
 
 [[lean_lib]]
-name = "LeanBWT"
+name = "Bzip2"
 
 [[lean_exe]]
-name = "leanbwt"
-root = "Main"
+name = "bzip2"
+root = "Bzip2"
 
 [[require]]
 name = "mathlib"

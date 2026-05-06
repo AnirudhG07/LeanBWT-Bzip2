@@ -1,6 +1,6 @@
 import Mathlib
 
-namespace LeanBWT
+namespace Bzip2
 
 set_option autoImplicit false
 
@@ -133,25 +133,42 @@ def rleDecode {β : Type} : List (β × Nat) → List β
   | [] => []
   | (x, n) :: rest => List.replicate n x ++ rleDecode rest
 
-/-- Compressed payload with BWT metadata plus RLE payload. -/
+/-- Move-To-Front encoding. -/
+def mtfEncode {β : Type} [DecidableEq β] (alphabet : List β) : List β → List Nat
+  | [] => []
+  | x :: xs =>
+      let idx := alphabet.findIdx (· == x)
+      let newAlphabet := x :: alphabet.erase x
+      idx :: mtfEncode newAlphabet xs
+
+/-- Move-To-Front decoding. -/
+def mtfDecode {β : Type} [DecidableEq β] [Inhabited β] (alphabet : List β) : List Nat → List β
+  | [] => []
+  | i :: is =>
+      let x := alphabet[i]!
+      let newAlphabet := x :: alphabet.erase x
+      x :: mtfDecode newAlphabet is
+
+/-- Compressed payload with BWT metadata plus RLE and MTF payload. -/
 structure Compressed (α : Type) where
-  bwt : BWTResult α
-  payload : List (Symbol α × Nat)
+  primary : Nat
+  alphabet : List (Symbol α)
+  payload : List (Nat × Nat)
   deriving Repr
 
-/-- Compression: BWT then RLE on the BWT last column. -/
+/-- Compression: BWT, then MTF, then RLE. -/
 @[simp, grind .]
 def compress (xs : List α) : Compressed α :=
   let b := transform xs
-  { bwt := b, payload := rleEncode b.last }
+  let alphabet := (withSentinel xs).eraseDups.mergeSort (· ≤ ·)
+  let mtf := mtfEncode alphabet b.last
+  { primary := b.primary, alphabet := alphabet, payload := rleEncode mtf }
 
-/-- Decompression: decode payload, verify column, then inverse. -/
+/-- Decompression: RLE decode, then MTF decode, then inverse BWT. -/
 @[simp, grind .]
 def decompress (c : Compressed α) : List α :=
-  let decoded := rleDecode c.payload
-  if decoded = c.bwt.last then
-    inverse c.bwt
-  else
-    []
+  let mtf := rleDecode c.payload
+  let last := mtfDecode c.alphabet mtf
+  inverseFromLast last c.primary
 
-end LeanBWT
+end Bzip2
