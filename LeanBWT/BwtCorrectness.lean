@@ -292,6 +292,7 @@ theorem LF_of_shiftRowIdx (xs : List α) (k : Nat) :
     simpa [j, k', n, L, bwt] using (last_of_shiftRowIdx (xs := xs) ((k' + n - 1) % n))
   have hj : j < (firstColumn L).length := by
     simpa [firstColumn, List.length_mergeSort] using hjL
+  -- TODO
   have htag : tagF L j = tagL L i := by
     sorry
   apply tag_uniqueness_F L (LF L i) j
@@ -305,11 +306,42 @@ lemma lfCollect_eq_reverse_take (xs : List α) (c : Nat) (k : Nat) :
     let last := (transform xs).last
     let k' := k % n
     (lfCollect last c (shiftRowIdx xs k')).reverse =
-      (List.range c).map (fun i => (withSentinel xs).getD ((k' + n - i) % n) ⊥) := by
+      (List.range c).map (fun i => (withSentinel xs).getD ((k' + n - (c + 1) + i) % n) ⊥) := by
   induction c generalizing k with
   | zero => simp [lfCollect]
   | succ c ih =>
+      let n := xs.length + 1
+      let last := (transform xs).last
+      let k' := k % n
+      have hstep : lfStep last (shiftRowIdx xs k') = shiftRowIdx xs ((k' + n - 1) % n) := by
+        simpa [LF, lfStep, n, last, k'] using (LF_of_shiftRowIdx (xs := xs) k)
+      have ih' := ih ((k' + n - 1) % n)
+      simp [n, k'] at ih'
+      apply?
+
+      -- TODO
       sorry
+
+lemma map_getD_range (ys : List (Symbol α)) :
+    (List.range ys.length).map (fun i => ys.getD i ⊥) = ys := by
+  induction ys with
+  | nil => simp
+  | cons y ys ih =>
+      simpa [List.range_succ_eq_map, Nat.add_comm, Nat.add_left_comm, Nat.add_assoc] using congrArg (List.cons y) ih
+
+lemma stripSentinel_withSentinel (xs : List α) :
+    stripSentinel (withSentinel xs) = xs := by
+  induction xs with
+  | nil =>
+      simp_all [stripSentinel, withSentinel]
+      intros; expose_names; exact List.mem_singleton.mp h
+
+  | cons x xs ih =>
+      simp_all [stripSentinel, withSentinel]
+      exact
+        Eq.symm
+          (List.append_cancel_left
+            (congrArg (HAppend.hAppend xs) (congrArg (List.cons x) (id (Eq.symm ih)))))
 
 theorem inverse_transform_from_LF (xs : List α) :
     inverse (transform xs) = xs := by
@@ -317,11 +349,39 @@ theorem inverse_transform_from_LF (xs : List α) :
   let bwt := transform xs
   let last := bwt.last
   let primary := bwt.primary
+  have hnpos : 0 < n := by
+    simp [n]
+  have hlast : last.length = n := by
+    simpa [n, bwt, last, transform, lastColumn] using (bwtmatrix_length (xs := xs))
 
   have hprim : primary = shiftRowIdx xs 0 := by
     simp [transform, bwt, primary, shiftRowIdx, rotations, rotateLeft, withSentinel]
-
-  sorry
+  have hcollect := lfCollect_eq_reverse_take (xs := xs) (c := n) (k := 0)
+  simp [n, Nat.mod_eq_of_lt hnpos] at hcollect
+  have hcollect' :
+      (lfCollect last n (shiftRowIdx xs 0)).reverse =
+        (List.range n).map (fun i => (withSentinel xs).getD (i % n) ⊥) := by grind
+  have hmod :
+      (List.range n).map (fun i => (withSentinel xs).getD (i % n) ⊥) =
+        (List.range n).map (fun i => (withSentinel xs).getD i ⊥) := by
+    refine List.map_congr_left ?_
+    intro i hi
+    have hi' : i < n := List.mem_range.mp hi
+    simp [Nat.mod_eq_of_lt hi']
+  calc
+    inverse (transform xs)
+        = stripSentinel ((lfCollect last last.length primary).reverse) := by
+            simp [inverse, inverseAlgorithmic, inverseFromLast, bwt, last, primary]
+    _ = stripSentinel ((lfCollect last n primary).reverse) := by
+          simp [hlast]
+    _ = stripSentinel ((lfCollect last n (shiftRowIdx xs 0)).reverse) := by simp [hprim]
+    _ = stripSentinel ((List.range n).map (fun i => (withSentinel xs).getD (i % n) ⊥)) := by
+          simpa using congrArg stripSentinel hcollect'
+    _ = stripSentinel ((List.range n).map (fun i => (withSentinel xs).getD i ⊥)) := by
+          simpa [stripSentinel] using congrArg stripSentinel hmod
+    _ = stripSentinel (withSentinel xs) := by
+          simpa [withSentinel_length] using congrArg stripSentinel (map_getD_range (ys := withSentinel xs))
+    _ = xs := by simpa using (stripSentinel_withSentinel (xs := xs))
 
 end LFProofs
 
