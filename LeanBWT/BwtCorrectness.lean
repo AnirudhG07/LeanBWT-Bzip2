@@ -275,6 +275,32 @@ lemma last_of_shiftRowIdx (xs : List α) (k : Nat) :
     shiftRowIdx xs (k % n) < (transform xs).last.length := by
   simpa [transform, lastColumn] using (bwtmatrix_get_shiftRowIdx (xs := xs) k)
 
+lemma last_getD_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    (transform xs).last.getD (shiftRowIdx xs (k % n)) ⊥ = (withSentinel xs).getD ((k % n + n - 1) % n) ⊥ := by
+  let n := xs.length + 1
+  let k' := k % n
+  let ys := withSentinel xs
+  have hi : shiftRowIdx xs k' < (bwtmatrix xs).length := bwtmatrix_get_shiftRowIdx xs k
+  simp [transform, lastColumn]
+  have hget : (bwtmatrix xs).getD (shiftRowIdx xs k') [] = rotateLeft ys k' := by
+    simp_all [shiftRowIdx, bwtmatrix, rotations, ys, k', n]
+    grind =>
+      instantiate only [= List.range_one, = getElem?_pos, usr List.findIdx_lt_length]
+      instantiate only [= List.range_eq_nil]
+      cases #0ea4
+      instantiate only [= Option.getD_some, usr List.findIdx_getElem]
+  simp_all only [bwtmatrix, rotations, List.getD_eq_getElem?_getD, getElem?_pos, Option.getD_some]
+  rw [List.getD_map, hget, last_symbol_of_shift]
+  simp [n]
+
+lemma first_getD_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    (firstColumn (transform xs).last).getD (shiftRowIdx xs (k % n)) ⊥ = (withSentinel xs).getD (k % n) ⊥ := by
+  -- firstColumn is sorted lastColumn
+  -- The heads of bwtmatrix are firstColumn symbols
+  sorry
+
 theorem LF_of_shiftRowIdx (xs : List α) (k : Nat) :
     let n := xs.length + 1
     let last := (transform xs).last
@@ -292,9 +318,31 @@ theorem LF_of_shiftRowIdx (xs : List α) (k : Nat) :
     simpa [j, k', n, L, bwt] using (last_of_shiftRowIdx (xs := xs) ((k' + n - 1) % n))
   have hj : j < (firstColumn L).length := by
     simpa [firstColumn, List.length_mergeSort] using hjL
-  -- TODO
+
+  -- First-Last Property: the tags match between columns
   have htag : tagF L j = tagL L i := by
-    sorry
+    apply Prod.ext
+    · -- 1. Symbols match
+      simp [tagF, tagL, L, bwt, lastColumn, firstColumn]
+      -- Last of row i
+      have hLi : L.getD i ⊥ = (withSentinel xs).getD ((k' + n - 1) % n) ⊥ := by
+        simp_all only [firstColumn, List.length_mergeSort, List.getD_eq_getElem?_getD, getElem?_pos,
+          Option.getD_some]
+        grind +suggestions
+      -- First of row j
+      have hFj : (firstColumn L).getD j ⊥ = (withSentinel xs).getD ((k' + n - 1) % n) ⊥ := by
+        simp_all only [firstColumn, List.length_mergeSort, List.getD_eq_getElem?_getD, getElem?_pos, Option.getD_some]
+        refine
+          (List.getElem_eq_iff
+                (of_eq_true
+                  (Eq.trans (congrArg (LT.lt j) (List.length_mergeSort L)) (eq_true hjL)))).mpr
+            ?_
+        sorry
+      grind
+    · -- 2. Ranks match (The First-Last property)
+      -- This is true because sorting is stable.
+      sorry
+
   apply tag_uniqueness_F L (LF L i) j
   · exact LF_lt_firstColumn_length L i hi
   · exact hj
@@ -313,14 +361,22 @@ lemma lfCollect_eq_reverse_take (xs : List α) (c : Nat) (k : Nat) :
       let n := xs.length + 1
       let last := (transform xs).last
       let k' := k % n
-      have hstep : lfStep last (shiftRowIdx xs k') = shiftRowIdx xs ((k' + n - 1) % n) := by
-        simpa [LF, lfStep, n, last, k'] using (LF_of_shiftRowIdx (xs := xs) k)
-      have ih' := ih ((k' + n - 1) % n)
-      simp [n, k'] at ih'
-      apply?
-
-      -- TODO
-      sorry
+      let next_k := (k' + n - 1) % n
+      have hstep : lfStep last (shiftRowIdx xs k') = shiftRowIdx xs next_k := by
+        simpa [LF, lfStep, n, last, k', next_k] using (LF_of_shiftRowIdx (xs := xs) k)
+      simp [lfCollect, hstep, ih next_k]
+      rw [List.reverse_cons, List.range_succ, List.map_append, List.map_singleton]
+      congr 1
+      · refine List.map_congr_left (fun i hi => ?_)
+        have hi' : i < c := List.mem_range.mp hi
+        simp [next_k]
+        congr 1
+        omega
+      · simp [next_k]
+        rw [last_getD_shiftRowIdx]
+        simp [n]
+        congr 1
+        omega
 
 lemma map_getD_range (ys : List (Symbol α)) :
     (List.range ys.length).map (fun i => ys.getD i ⊥) = ys := by
