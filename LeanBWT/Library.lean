@@ -90,6 +90,14 @@ def decompressString? (encoded : String) : Except String String := do
 def defaultCompressedPath (inputPath : System.FilePath) : System.FilePath :=
   System.FilePath.mk (inputPath.toString ++ compressedFileSuffix)
 
+def getFileWithoutExtension (path : System.FilePath)
+  (extension : Option String := compressedFileSuffix) : String :=
+  let name := path.fileName.getD ""
+  match name.splitOn "." with
+  | [] => name
+  | [_] => name
+  | parts => String.intercalate "." (parts.dropLast)
+
 /-- Default output path used by `decompressFile`. -/
 def defaultDecompressedPath (inputPath : System.FilePath) : System.FilePath :=
   if inputPath.toString.endsWith compressedFileSuffix then
