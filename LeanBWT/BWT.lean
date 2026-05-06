@@ -89,6 +89,7 @@ def transform (xs : List α) : BWTResult α :=
   }
 
 /-- Inverse Burrows-Wheeler transform API. -/
+@[simp, grind .]
 def lfCollect (last : List (Symbol α)) : Nat → Nat → List (Symbol α)
   | 0, _ => []
   | Nat.succ k, j =>
@@ -100,6 +101,7 @@ def stripSentinel (xs : List (Symbol α)) : List α :=
   xs.filterMap id
 
 /-- Algorithmic inverse from `(last, primary)` using LF traversal. -/
+@[simp, grind .]
 def inverseFromLast (last : List (Symbol α)) (primary : Nat) : List α :=
   stripSentinel ((lfCollect last last.length primary).reverse)
 
@@ -108,6 +110,7 @@ def inverseAlgorithmic (r : BWTResult α) : List α :=
   inverseFromLast r.last r.primary
 
 /-- Inverse Burrows-Wheeler transform API. -/
+@[simp, grind .]
 def inverse (r : BWTResult α) : List α :=
   inverseAlgorithmic r
 

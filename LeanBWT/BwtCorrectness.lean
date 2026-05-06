@@ -57,7 +57,7 @@ theorem rleDecode_rleEncode (xs : List β) :
 
 end RLE
 
-section LFProofRoadmap
+section LFProofs
 
 set_option autoImplicit false
 
@@ -252,17 +252,78 @@ theorem LF_predecessor_semantics (L : List (Symbol α)) :
   intro i hi
   exact tagF_LF_eq_tagL (L := L) i hi
 
+/-- The row index in `bwtmatrix xs` corresponding to `rotateLeft (withSentinel xs) k`. -/
+def shiftRowIdx (xs : List α) (k : Nat) : Nat :=
+  (bwtmatrix xs).findIdx (fun row => decide (row = rotateLeft (withSentinel xs) k))
+
+lemma bwtmatrix_get_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    shiftRowIdx xs (k % n) < (bwtmatrix xs).length := by
+  let n := xs.length + 1
+  let k' := k % n
+  let ys := withSentinel xs
+  have hn : ys.length = n := withSentinel_length xs
+  have hlen_mat : (bwtmatrix xs).length = n := bwtmatrix_length xs
+  have hk_lt : k' < n := by
+    simp_all [k']
+    refine Nat.mod_lt k ?_
+    exact Nat.zero_lt_succ xs.length
+  grind [shiftRowIdx, bwtmatrix_mem_iff_rotations_mem]
+
+lemma last_of_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    shiftRowIdx xs (k % n) < (transform xs).last.length := by
+  simpa [transform, lastColumn] using (bwtmatrix_get_shiftRowIdx (xs := xs) k)
+
+theorem LF_of_shiftRowIdx (xs : List α) (k : Nat) :
+    let n := xs.length + 1
+    let last := (transform xs).last
+    let k' := k % n
+    LF last (shiftRowIdx xs k') = shiftRowIdx xs ((k' + n - 1) % n) := by
+  let n := xs.length + 1
+  let k' := k % n
+  let bwt := transform xs
+  let L := bwt.last
+  let i := shiftRowIdx xs k'
+  let j := shiftRowIdx xs ((k' + n - 1) % n)
+  have hi : i < L.length := by
+    simpa [i, k', n, L, bwt] using (last_of_shiftRowIdx (xs := xs) k)
+  have hjL : j < L.length := by
+    simpa [j, k', n, L, bwt] using (last_of_shiftRowIdx (xs := xs) ((k' + n - 1) % n))
+  have hj : j < (firstColumn L).length := by
+    simpa [firstColumn, List.length_mergeSort] using hjL
+  have htag : tagF L j = tagL L i := by
+    sorry
+  apply tag_uniqueness_F L (LF L i) j
+  · exact LF_lt_firstColumn_length L i hi
+  · exact hj
+  · simpa [LF] using (tagF_LF_eq_tagL (L := L) i hi).trans htag.symm
+
+/-- Induction lemma: `lfCollect` correctly traverses the string backward. -/
+lemma lfCollect_eq_reverse_take (xs : List α) (c : Nat) (k : Nat) :
+    let n := xs.length + 1
+    let last := (transform xs).last
+    let k' := k % n
+    (lfCollect last c (shiftRowIdx xs k')).reverse =
+      (List.range c).map (fun i => (withSentinel xs).getD ((k' + n - i) % n) ⊥) := by
+  induction c generalizing k with
+  | zero => simp [lfCollect]
+  | succ c ih =>
+      sorry
+
 theorem inverse_transform_from_LF (xs : List α) :
     inverse (transform xs) = xs := by
-  /-
-    TODO: complete the final round-trip proof for the algorithmic LF decoder.
-    The LF infrastructure above (`LF_predecessor_semantics`, `LF_bijective_on_indices`)
-    is in place; we still need the bridge from those index-level facts to
-    `inverseFromLast (transform xs).last (transform xs).primary = xs`.
-  -/
+  let n := xs.length + 1
+  let bwt := transform xs
+  let last := bwt.last
+  let primary := bwt.primary
+
+  have hprim : primary = shiftRowIdx xs 0 := by
+    simp [transform, bwt, primary, shiftRowIdx, rotations, rotateLeft, withSentinel]
+
   sorry
 
-end LFProofRoadmap
+end LFProofs
 
 section BWT
 
