@@ -27,6 +27,20 @@ structure CanonicalTable where
   maxLength : Nat
 deriving Repr, DecidableEq
 
+/-- Look up the canonical code assigned to one symbol, if any. -/
+def CanonicalTable.findEntry? (table : CanonicalTable) (symbol : Nat) : Option CanonicalEntry :=
+  table.entries.find? (fun entry => entry.symbol = symbol)
+
+private def positiveLengths (lengths : List Nat) : List Nat :=
+  lengths.filter (0 < ·)
+
+private def minPositiveLength? : List Nat → Option Nat
+  | [] => none
+  | x :: xs => some (xs.foldl Nat.min x)
+
+private def overfullEntry? (entry : CanonicalEntry) : Bool :=
+  entry.code ≥ 2 ^ entry.bitLength
+
 private def symbolsWithLengthAux :
     Nat → Nat → List Nat → List Nat → List Nat
   | _, _, [], acc => acc.reverse
@@ -43,16 +57,6 @@ private def assignEntriesAux :
   | sym :: rest, bitLength, nextCode, acc =>
       assignEntriesAux rest bitLength (nextCode + 1)
         ({ symbol := sym, bitLength := bitLength, code := nextCode } :: acc)
-
-private def positiveLengths (lengths : List Nat) : List Nat :=
-  lengths.filter (0 < ·)
-
-private def minPositiveLength? : List Nat → Option Nat
-  | [] => none
-  | x :: xs => some (xs.foldl Nat.min x)
-
-private def overfullEntry? (entry : CanonicalEntry) : Bool :=
-  entry.code ≥ 2 ^ entry.bitLength
 
 private def buildEntries (codeLengths : List Nat) (maxLength : Nat) : List CanonicalEntry :=
   Id.run do

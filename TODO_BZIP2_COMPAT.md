@@ -112,29 +112,29 @@ Goal: decode real Linux-generated `.bz2` files.
 
 Goal: emit `.bz2` files accepted by system `bzip2`.
 
-- [ ] Add initial RLE1 encode before BWT.
-- [ ] Run BWT on the RLE1 block data.
-- [ ] Emit exact `origPtr`.
-- [ ] Build used-byte symbol map from the block alphabet.
-- [ ] Run MTF over the used-byte alphabet.
-- [ ] Encode zero runs using RUNA/RUNB.
-- [ ] Append exact end-of-block symbol.
-- [ ] Split symbol stream into groups of 50.
-- [ ] Choose 2 to 6 Huffman tables.
-- [ ] Compute selector list.
-- [ ] MTF-encode selectors.
-- [ ] Emit canonical code lengths with the exact delta encoding.
-- [ ] Bit-pack exact block contents without custom byte padding mistakes.
-- [ ] Emit exact end-of-stream marker and combined CRC.
+- [x] Add initial RLE1 encode before BWT.
+- [x] Run BWT on the RLE1 block data.
+- [x] Emit exact `origPtr`.
+- [x] Build used-byte symbol map from the block alphabet.
+- [x] Run MTF over the used-byte alphabet.
+- [x] Encode zero runs using RUNA/RUNB.
+- [x] Append exact end-of-block symbol.
+- [x] Split symbol stream into groups of 50.
+- [x] Choose 2 to 6 Huffman tables.
+- [x] Compute selector list.
+- [x] MTF-encode selectors.
+- [x] Emit canonical code lengths with the exact delta encoding.
+- [x] Bit-pack exact block contents without custom byte padding mistakes.
+- [x] Emit exact end-of-stream marker and combined CRC.
 
 ## Phase 3: Linux Interoperability Milestones
 
 These are the concrete gates for “real compatibility”.
 
-- [ ] `bzip2 -dc system_file.bz2` == our decoder output.
-- [ ] `our_compress file | bzip2 -dc` reproduces the original bytes.
-- [ ] `bzip2 -t our_output.bz2` succeeds.
-- [ ] `bunzip2` can decompress our output files without complaint.
+- [x] `bzip2 -dc system_file.bz2` == our decoder output.
+- [x] `our_compress file | bzip2 -dc` reproduces the original bytes.
+- [x] `bzip2 -t our_output.bz2` succeeds.
+- [x] `bunzip2` can decompress our output files without complaint.
 - [ ] Concatenated streams work both ways when practical.
 - [ ] Mixed test corpus passes for all block sizes `-1` through `-9`.
 
@@ -247,9 +247,9 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 We are done only when all of these are true:
 
-- [ ] Our decoder reads `.bz2` produced by Linux `bzip2`.
-- [ ] Linux `bzip2` / `bunzip2` reads `.bz2` produced by us.
-- [ ] `bzip2 -t` passes on our output.
+- [x] Our decoder reads `.bz2` produced by Linux `bzip2`.
+- [x] Linux `bzip2` / `bunzip2` reads `.bz2` produced by us.
+- [x] `bzip2 -t` passes on our output.
 - [ ] Small, medium, and large corpus tests pass.
 - [ ] Corruption and malformed-input tests pass.
 - [ ] Exact stream encode/decode roundtrip theorem is proved.
@@ -258,10 +258,9 @@ We are done only when all of these are true:
 
 ## Immediate Next Task
 
-Start Phase 1 with the exact decoder:
+Start Phase 3 with broader interoperability coverage and the proof bridge:
 
-- implement a real bit reader
-- parse real block metadata
-- decode RUNA/RUNB + end-of-block
-- reconstruct MTF stream
-- compare our decode results against Linux `bzip2 -dc` on golden files
+- exercise exact `.bz2` compression and decompression across block sizes `-1` through `-9`
+- add concatenated-stream interoperability checks against the Linux tools
+- turn the remaining malformed exact-stream placeholders into real fixture-based tests
+- begin the exact block semantic model used for refinement proofs from the abstract BWT pipeline

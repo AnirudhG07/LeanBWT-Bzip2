@@ -47,6 +47,24 @@ private def loadExactFixture (name : String) : IO (Except String ByteArray) := d
   let hexChars := raw.toList.filter (fun c => hexValue? c |>.isSome)
   pure <| decodeHexAux hexChars []
 
+private def removeIfExists (path : System.FilePath) : IO Unit := do
+  if (← path.pathExists) then
+    IO.FS.removeFile path
+
+private def runSystemBzip2 (args : Array String) : IO (Except String Unit) := do
+  let out ← IO.Process.output { cmd := "/usr/bin/bzip2", args := args }
+  if out.exitCode = 0 then
+    pure (.ok ())
+  else
+    pure (.error s!"exit {out.exitCode}: {out.stderr}")
+
+private def runSystemBunzip2 (args : Array String) : IO (Except String Unit) := do
+  let out ← IO.Process.output { cmd := "/usr/bin/bunzip2", args := args }
+  if out.exitCode = 0 then
+    pure (.ok ())
+  else
+    pure (.error s!"exit {out.exitCode}: {out.stderr}")
+
 private def bumpByte (b : UInt8) : UInt8 :=
   UInt8.ofNat (b.toNat + 1)
 
@@ -251,6 +269,57 @@ private def exactLinuxFixtureCase : TestCase :=
                 pure <| .fail "exact `.bz2` fixture decoded incorrectly"
   }
 
+private def exactLinuxValidationCase : TestCase :=
+  { name := "Linux bzip2 validates our output"
+  , run := do
+      let input := "Exact bz2 interoperability check.\nAAAAAABBBBBCCCCCDDDD\n".toUTF8
+      let archivePath : System.FilePath := "tests/tmp_main_exact_output.bz2"
+      let outputPath : System.FilePath := "tests/tmp_main_exact_output"
+      try
+        match compressBz2? input with
+        | .error err => pure <| .fail s!"exact encode error: {err}"
+        | .ok archive =>
+            IO.FS.writeBinFile archivePath archive
+            match ← runSystemBzip2 #["-t", archivePath.toString] with
+            | .error err => pure <| .fail s!"system test failed: {err}"
+            | .ok _ =>
+                match ← runSystemBzip2 #["-dkf", archivePath.toString] with
+                | .error err => pure <| .fail s!"system decompress failed: {err}"
+                | .ok _ =>
+                    let decoded ← IO.FS.readBinFile outputPath
+                    if decoded = input then
+                      pure .pass
+                    else
+                      pure <| .fail "system bzip2 decoded bytes do not match the original input"
+      finally
+        removeIfExists archivePath
+        removeIfExists outputPath
+  }
+
+private def exactBunzip2ValidationCase : TestCase :=
+  { name := "Linux bunzip2 decompresses our output"
+  , run := do
+      let input := "bunzip2 compatibility check\n0000111122223333\n".toUTF8
+      let archivePath : System.FilePath := "tests/tmp_main_bunzip2_output.bz2"
+      let outputPath : System.FilePath := "tests/tmp_main_bunzip2_output"
+      try
+        match compressBz2? input with
+        | .error err => pure <| .fail s!"exact encode error: {err}"
+        | .ok archive =>
+            IO.FS.writeBinFile archivePath archive
+            match ← runSystemBunzip2 #["-kf", archivePath.toString] with
+            | .error err => pure <| .fail s!"system bunzip2 failed: {err}"
+            | .ok _ =>
+                let decoded ← IO.FS.readBinFile outputPath
+                if decoded = input then
+                  pure .pass
+                else
+                  pure <| .fail "system bunzip2 decoded bytes do not match the original input"
+      finally
+        removeIfExists archivePath
+        removeIfExists outputPath
+  }
+
 private def smallCases : List TestCase :=
   [ roundtripCase "empty bytes" ByteArray.empty
   , roundtripCase "one byte" (byteArrayOfList [0x41])
@@ -304,7 +373,7 @@ private def pendingLargeCases : List TestCase :=
       "Activate after native block implementation replaces the spec-layer matrix algorithm."
   ]
 
-private def pendingExactBz2Cases : List TestCase :=
+private def exactBz2Cases : List TestCase :=
   [ pendingCase "malformed selector list rejects"
       "Requires the exact bz2 Huffman-selector decoder."
   , pendingCase "malformed code lengths rejects"
@@ -312,12 +381,12 @@ private def pendingExactBz2Cases : List TestCase :=
   , pendingCase "missing end-of-block symbol rejects"
       "Requires the exact bz2 end-of-block symbol stream."
   , exactLinuxFixtureCase
-  , pendingCase "Linux bzip2 validates our output"
-      "Requires exact bz2 block encoding."
+  , exactLinuxValidationCase
+  , exactBunzip2ValidationCase
   ]
 
 private def allCases : List TestCase :=
-  smallCases ++ mediumCases ++ streamCases ++ negativeCases ++ pendingLargeCases ++ pendingExactBz2Cases
+  smallCases ++ mediumCases ++ streamCases ++ negativeCases ++ pendingLargeCases ++ exactBz2Cases
 
 private def runCase (summary : Summary) (tc : TestCase) : IO Summary := do
   match ← tc.run with

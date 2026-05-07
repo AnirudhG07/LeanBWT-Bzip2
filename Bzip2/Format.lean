@@ -10,8 +10,10 @@ import Bzip2.Format.BZ2
 
 Byte-level container and stream-format layer.
 
-Today this layer provides the project's `.bz2`-inspired native-on-disk format:
-block framing, CRCs, block payload serialization, and Huffman-backed archive
-packing, plus the phase-1 exact `.bz2` parser subtree. The current output is
-`.lbz2` and is not yet exact `.bz2`.
+Today this layer provides both:
+- the project's older `.bz2`-inspired `.lbz2` container, and
+- the exact `.bz2` compression/decompression subtree.
+
+The transitional `.lbz2` format remains for the proved abstract pipeline,
+while `Bzip2.Format.BZ2` now owns Linux-compatible exact stream handling.
 -/

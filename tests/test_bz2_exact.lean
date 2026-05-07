@@ -57,6 +57,17 @@ private def replaceByteAtAux : List UInt8 → Nat → UInt8 → List UInt8
 private def replaceByteAt (bytes : ByteArray) (index : Nat) (value : UInt8) : ByteArray :=
   byteArrayOfList <| replaceByteAtAux bytes.toList index value
 
+private def removeIfExists (path : System.FilePath) : IO Unit := do
+  if (← path.pathExists) then
+    IO.FS.removeFile path
+
+private def runSystemBzip2 (args : Array String) : IO (Except String Unit) := do
+  let out ← IO.Process.output { cmd := "/usr/bin/bzip2", args := args }
+  if out.exitCode = 0 then
+    pure (.ok ())
+  else
+    pure (.error s!"exit {out.exitCode}: {out.stderr}")
+
 private def exactHeaderCase : TestCase :=
   { name := "exact empty-stream header and eos"
   , run := do
@@ -181,6 +192,76 @@ private def exactCorruptBlockCrcCase : TestCase :=
               pure .pass
   }
 
+private def exactEncoderSelfRoundtripCase : TestCase :=
+  { name := "exact encoder self-roundtrips"
+  , run := do
+      let input := byteArrayOfList <|
+        [0, 0, 0, 0, 0, 0, 255, 254, 13, 10, 97, 97, 97, 97, 98, 99, 120, 121, 122].map UInt8.ofNat
+      match BZip2.compressBz2? input with
+      | .error err => pure <| .fail s!"encode error: {err}"
+      | .ok archive =>
+          match BZip2.decompressBz2? archive with
+          | .error err => pure <| .fail s!"decode error: {err}"
+          | .ok decoded =>
+              if decoded = input then
+                pure .pass
+              else
+                pure <| .fail "exact encoder did not self-roundtrip"
+  }
+
+private def exactEncoderSystemBzip2Case : TestCase :=
+  { name := "system bzip2 validates and decompresses our exact output"
+  , run := do
+      let input := byteArrayOfList <|
+        [0, 0, 0, 0, 0, 255, 255, 255, 1, 2, 3, 4, 65, 65, 65, 65, 65, 10, 200].map UInt8.ofNat
+      let archivePath : System.FilePath := "tests/tmp_exact_encoder_output.bz2"
+      let outputPath : System.FilePath := "tests/tmp_exact_encoder_output"
+      try
+        match BZip2.compressBz2? input with
+        | .error err => pure <| .fail s!"encode error: {err}"
+        | .ok archive =>
+            IO.FS.writeBinFile archivePath archive
+            match ← runSystemBzip2 #["-t", archivePath.toString] with
+            | .error err => pure <| .fail s!"system test failed: {err}"
+            | .ok _ =>
+                match ← runSystemBzip2 #["-dkf", archivePath.toString] with
+                | .error err => pure <| .fail s!"system decompress failed: {err}"
+                | .ok _ =>
+                    let decoded ← IO.FS.readBinFile outputPath
+                    if decoded = input then
+                      pure .pass
+                    else
+                      pure <| .fail "system bzip2 decoded bytes do not match the original input"
+      finally
+        removeIfExists archivePath
+        removeIfExists outputPath
+  }
+
+private def exactDecoderReadsSystemBzip2Case : TestCase :=
+  { name := "our exact decoder reads fresh system bzip2 output"
+  , run := do
+      let input := byteArrayOfList <|
+        [42, 42, 42, 42, 42, 1, 2, 3, 4, 5, 255, 0, 13, 10, 65, 66, 67].map UInt8.ofNat
+      let inputPath : System.FilePath := "tests/tmp_system_source.bin"
+      let archivePath : System.FilePath := "tests/tmp_system_source.bin.bz2"
+      try
+        IO.FS.writeBinFile inputPath input
+        match ← runSystemBzip2 #["-kf", inputPath.toString] with
+        | .error err => pure <| .fail s!"system compress failed: {err}"
+        | .ok _ =>
+            let archive ← IO.FS.readBinFile archivePath
+            match BZip2.decompressBz2? archive with
+            | .error err => pure <| .fail s!"decode error: {err}"
+            | .ok decoded =>
+                if decoded = input then
+                  pure .pass
+                else
+                  pure <| .fail "our exact decoder did not match the original system-compressed bytes"
+      finally
+        removeIfExists inputPath
+        removeIfExists archivePath
+  }
+
 private def cases : List TestCase :=
   [ exactHeaderCase
   , exactBlockMetadataCase
@@ -188,6 +269,9 @@ private def cases : List TestCase :=
   , exactBananaDecodeCase
   , exactConcatenatedCase
   , exactCorruptBlockCrcCase
+  , exactEncoderSelfRoundtripCase
+  , exactEncoderSystemBzip2Case
+  , exactDecoderReadsSystemBzip2Case
   ]
 
 private def runCase (summary : Summary) (tc : TestCase) : IO Summary := do

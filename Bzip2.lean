@@ -21,4 +21,4 @@ Current status:
 -/
 
 export BZip2 (compress decompress compressString decompressString? compressFile decompressFile)
-export BZip2 (compressBinary? compressBinaryWithBlockSize? decompressBinary? decompressBz2? compressPayload decompressPayload)
+export BZip2 (compressBinary? compressBinaryWithBlockSize? decompressBinary? compressBz2? compressBz2WithBlockSize? decompressBz2? compressPayload decompressPayload)
