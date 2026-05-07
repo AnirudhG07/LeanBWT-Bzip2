@@ -1,5 +1,19 @@
 import Mathlib
 
+/-!
+Core semantic specification for the project.
+
+This file contains the abstract, list-based model of the BWT pipeline:
+- sentinel-augmented rotations,
+- sorted BWT matrix construction,
+- inverse BWT via LF traversal,
+- MTF and RLE staging,
+- the abstract `compress` / `decompress` pair.
+
+This module is treated as the frozen semantic reference for later native and
+exact-format refinements.
+-/
+
 namespace Bzip2
 
 set_option autoImplicit false

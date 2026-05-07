@@ -62,15 +62,16 @@ them.
 
 ## Phase 0: Freeze and Clean Boundaries
 
-- [ ] Freeze the current verified abstract layer as the semantic spec.
-- [ ] Write down the trust boundary for external dependencies.
-  - `LeanHuffmanCoding` may be used operationally before all its proofs land.
-- [ ] Separate modules clearly:
+- [x] Freeze the current verified abstract layer as the semantic spec.
+- [x] Write down the trust boundary for external dependencies.
+  - `LeanHuffmanCoding` is now treated as a proved external dependency for the
+    native/format layer.
+- [x] Separate modules clearly:
   - `Spec`: proved abstract BWT/MTF/RLE semantics
   - `Format`: exact `.bz2` bitstream structures
   - `Native`: executable encoder/decoder
   - `Correctness`: refinement theorems
-- [ ] Update README and public docs to distinguish:
+- [x] Update README and public docs to distinguish:
   - abstract / bz2-like
   - exact `.bz2` compatible
 
@@ -139,26 +140,30 @@ These are the concrete gates for “real compatibility”.
 
 ## Phase 4: Test Suite Expansion
 
+Checkboxes in this phase mean a runnable case is present in the current test
+harness. Cases left unchecked are still planned, but not yet honest to run on
+the current implementation.
+
 ### Small deterministic cases
 
-- [ ] empty file
-- [ ] one byte
-- [ ] two bytes
-- [ ] three bytes
-- [ ] four equal bytes
-- [ ] five equal bytes
-- [ ] alternating bytes
-- [ ] all 256 byte values once
-- [ ] all 256 byte values repeated
+- [x] empty file
+- [x] one byte
+- [x] two bytes
+- [x] three bytes
+- [x] four equal bytes
+- [x] five equal bytes
+- [x] alternating bytes
+- [x] all 256 byte values once
+- [x] all 256 byte values repeated
 
 ### Medium files
 
-- [ ] short English text
-- [ ] source code
-- [ ] JSON
-- [ ] repetitive binary
-- [ ] pseudo-random binary
-- [ ] data crossing one block boundary
+- [x] short English text
+- [x] source code
+- [x] JSON
+- [x] repetitive binary
+- [x] pseudo-random binary
+- [x] data crossing one block boundary
 
 ### Large files
 
@@ -170,15 +175,15 @@ These are the concrete gates for “real compatibility”.
 
 ### Negative / robustness tests
 
-- [ ] bad magic
-- [ ] bad block CRC
-- [ ] bad stream CRC
+- [x] bad magic
+- [x] bad block CRC
+- [x] bad stream CRC
 - [ ] malformed selector list
 - [ ] malformed code lengths
 - [ ] missing end-of-block symbol
-- [ ] truncated stream
-- [ ] trailing garbage
-- [ ] concatenated stream with second stream damaged
+- [x] truncated stream
+- [x] trailing garbage
+- [x] concatenated stream with second stream damaged
 
 ## Phase 5: Proof Plan
 
@@ -260,4 +265,3 @@ Start Phase 1 with the exact decoder:
 - decode RUNA/RUNB + end-of-block
 - reconstruct MTF stream
 - compare our decode results against Linux `bzip2 -dc` on golden files
-

@@ -1,6 +1,19 @@
 import Bzip2.ByteCodec
 import Bzip2.Format.Binary
 
+/-!
+Public executable API for LeanBzip2.
+
+This module is the main user-facing native layer:
+- in-memory `ByteArray` compression/decompression,
+- configurable block-size compression,
+- file helpers producing `.lbz2` archives,
+- legacy string helpers for the original abstract serialized payload.
+
+Important: the current binary archive is `.bz2`-inspired but not exact `.bz2`,
+so the file helpers intentionally use the `.lbz2` extension.
+-/
+
 set_option autoImplicit false
 
 namespace BZip2

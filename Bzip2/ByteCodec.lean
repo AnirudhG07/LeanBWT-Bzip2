@@ -1,12 +1,16 @@
-import Bzip2.Correctness.BwtCorrectness
+import Bzip2.Correctness
 
 /-!
-This file adds a byte-oriented API on top of the proved abstract BWT pipeline.
-It keeps the current list-based, sentinel-based development as the spec layer,
-and exposes a binary-safe in-memory interface over `ByteArray`.
+Native byte-oriented bridge from the semantic spec to executable `ByteArray`
+values.
 
-This is intentionally only a first step toward a real `.bz2` codec: it does
-not yet define an interoperable on-wire format.
+This file sits on the boundary between:
+- `Bzip2.Spec`, which defines the abstract semantics, and
+- `Bzip2.Native`, which exposes operational byte-level APIs.
+
+The definitions here are intentionally format-agnostic: they do not define an
+on-disk container and instead just transport the proved abstract payload to and
+from `ByteArray`.
 -/
 
 namespace Bzip2
