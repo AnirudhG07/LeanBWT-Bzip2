@@ -13,7 +13,7 @@ You can add this library as a dependency in `lakefile.toml` with:
 ```toml
 [[require]]
 name = "Bzip2"
-git = "https://github.com/AnirudhG07/Bzip2-Bzip2"
+git = "https://github.com/AnirudhG07/LeanBWT-Bzip2"
 rev = "v4.29.0"
 subDir = "bzip2"
 ```
@@ -21,7 +21,7 @@ subDir = "bzip2"
 For `lakefile.lean` you can use:
 
 ```
-require "AnirudhG07" / "Bzip2-Bzip2"
+require "AnirudhG07" / "LeanBWT-Bzip2"
 ```
 
 In your Lean code:
@@ -91,5 +91,5 @@ def decompressTo (input output : System.FilePath) : IO System.FilePath := do
 ## Important Note
 
 The `.bzip2` output produced here is a Bzip2 specific serialized payload built on this
-project's BWT + run-length encoding pipeline. It is not intended to be byte-compatible with the
+project's BWT + run-length encoding pipeline. It is not YET to be byte-compatible with the
 system `bzip2` tool.
