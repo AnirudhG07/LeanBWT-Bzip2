@@ -4,6 +4,9 @@ version = "0.1.0"
 [[lean_lib]]
 name = "Bzip2"
 
+[[lean_lib]]
+name = "tests"
+
 [[lean_exe]]
 name = "bzip2"
 root = "Bzip2"

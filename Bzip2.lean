@@ -17,8 +17,27 @@ Architecture:
 Current status:
 - the semantic core is proved correct,
 - the native archive format is `.bz2`-inspired and written as `.lbz2`,
-- exact Linux `bzip2` interoperability is still in progress.
+- exact `.bz2` compression/decompression interoperates with Linux `bzip2`.
 -/
 
-export BZip2 (compress decompress compressString decompressString? compressFile decompressFile)
-export BZip2 (compressBinary? compressBinaryWithBlockSize? decompressBinary? compressBz2? compressBz2WithBlockSize? decompressBz2? compressPayload decompressPayload)
+export BZip2
+  ( compress
+    decompress
+    compressString
+    decompressString?
+    compressFile
+    decompressFile
+    compressBz2File
+    compressBz2FileWithBlockSize
+    decompressBz2File
+  )
+export BZip2
+  ( compressBinary?
+    compressBinaryWithBlockSize?
+    decompressBinary?
+    compressBz2?
+    compressBz2WithBlockSize?
+    decompressBz2?
+    compressPayload
+    decompressPayload
+  )

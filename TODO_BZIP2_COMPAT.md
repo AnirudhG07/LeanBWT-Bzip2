@@ -135,8 +135,8 @@ These are the concrete gates for “real compatibility”.
 - [x] `our_compress file | bzip2 -dc` reproduces the original bytes.
 - [x] `bzip2 -t our_output.bz2` succeeds.
 - [x] `bunzip2` can decompress our output files without complaint.
-- [ ] Concatenated streams work both ways when practical.
-- [ ] Mixed test corpus passes for all block sizes `-1` through `-9`.
+- [x] Concatenated streams work both ways when practical.
+- [x] Mixed test corpus passes for all block sizes `-1` through `-9`.
 
 ## Phase 4: Test Suite Expansion
 
@@ -258,9 +258,9 @@ We are done only when all of these are true:
 
 ## Immediate Next Task
 
-Start Phase 3 with broader interoperability coverage and the proof bridge:
+Start Phase 4 and the proof bridge:
 
-- exercise exact `.bz2` compression and decompression across block sizes `-1` through `-9`
-- add concatenated-stream interoperability checks against the Linux tools
 - turn the remaining malformed exact-stream placeholders into real fixture-based tests
-- begin the exact block semantic model used for refinement proofs from the abstract BWT pipeline
+- add larger corpus coverage once the native block sorter replaces the matrix-based spec path
+- define the exact block semantic model between the abstract BWT pipeline and the exact bitstream
+- begin the refinement lemmas for RLE1, RUNA/RUNB, selectors, canonical Huffman coding, and bit I/O

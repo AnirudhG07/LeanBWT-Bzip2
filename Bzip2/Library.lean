@@ -9,11 +9,12 @@ This module is the main user-facing native layer:
 - in-memory `ByteArray` compression/decompression,
 - configurable block-size compression,
 - exact `.bz2` compression/decompression,
-- file helpers producing `.lbz2` archives,
+- file helpers for both transitional `.lbz2` archives and exact `.bz2` archives,
 - legacy string helpers for the original abstract serialized payload.
 
-Important: the current binary archive is `.bz2`-inspired but not exact `.bz2`,
-so the file helpers intentionally use the `.lbz2` extension.
+Important: the older transitional binary archive remains `.bz2`-inspired and
+uses the `.lbz2` extension, while the exact helpers below read and write real
+`.bz2` files.
 -/
 
 set_option autoImplicit false
@@ -139,9 +140,20 @@ def decompress (data : ByteArray) : Option ByteArray :=
 def defaultCompressedPath (inputPath : System.FilePath) : System.FilePath :=
   inputPath.addExtension "lbz2"
 
+/-- Default output path used by `compressBz2File`. -/
+def defaultExactCompressedPath (inputPath : System.FilePath) : System.FilePath :=
+  inputPath.addExtension "bz2"
+
 /-- Default output path used by `decompressFile`. -/
 def defaultDecompressedPath (inputPath : System.FilePath) : System.FilePath :=
   if inputPath.extension == some "lbz2" then
+    inputPath.withExtension ""
+  else
+    inputPath.withExtension "out"
+
+/-- Default output path used by `decompressBz2File`. -/
+def defaultExactDecompressedPath (inputPath : System.FilePath) : System.FilePath :=
+  if inputPath.extension == some "bz2" then
     inputPath.withExtension ""
   else
     inputPath.withExtension "out"
@@ -161,6 +173,39 @@ def compressFile (inputPath : System.FilePath) (outputPath : Option System.FileP
   return outputPath
 
 /--
+Compress the contents of `inputPath` as one exact `.bz2` stream and write the
+result to `outputPath`.
+-/
+def compressBz2File (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
+    IO System.FilePath := do
+  let outputPath := outputPath.getD (defaultExactCompressedPath inputPath)
+  let contents ← IO.FS.readBinFile inputPath
+  match compressBz2? contents with
+  | .ok archive =>
+      IO.FS.writeBinFile outputPath archive
+  | .error err =>
+      throw <| IO.userError err
+  return outputPath
+
+/--
+Compress the contents of `inputPath` as one exact `.bz2` stream using a `1`
+through `9` block-size digit, and write the result to `outputPath`.
+-/
+def compressBz2FileWithBlockSize
+    (blockSizeDigit : Nat)
+    (inputPath : System.FilePath)
+    (outputPath : Option System.FilePath := none) :
+    IO System.FilePath := do
+  let outputPath := outputPath.getD (defaultExactCompressedPath inputPath)
+  let contents ← IO.FS.readBinFile inputPath
+  match compressBz2WithBlockSize? blockSizeDigit contents with
+  | .ok archive =>
+      IO.FS.writeBinFile outputPath archive
+  | .error err =>
+      throw <| IO.userError err
+  return outputPath
+
+/--
 Decompress the binary archive stored at `inputPath` and write the decoded bytes to `outputPath`.
 -/
 def decompressFile (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
@@ -168,6 +213,21 @@ def decompressFile (inputPath : System.FilePath) (outputPath : Option System.Fil
   let outputPath := outputPath.getD (defaultDecompressedPath inputPath)
   let encoded ← IO.FS.readBinFile inputPath
   match decompressBinary? encoded with
+  | .ok decoded =>
+      IO.FS.writeBinFile outputPath decoded
+      return outputPath
+  | .error err =>
+      throw <| IO.userError err
+
+/--
+Decompress one or more concatenated exact `.bz2` streams stored at `inputPath`
+and write the decoded bytes to `outputPath`.
+-/
+def decompressBz2File (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
+    IO System.FilePath := do
+  let outputPath := outputPath.getD (defaultExactDecompressedPath inputPath)
+  let encoded ← IO.FS.readBinFile inputPath
+  match decompressBz2? encoded with
   | .ok decoded =>
       IO.FS.writeBinFile outputPath decoded
       return outputPath

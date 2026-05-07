@@ -1,72 +1,9 @@
 import Bzip2
+import tests.test_bzip2
 
 set_option autoImplicit false
 
 open Bzip2.Format.BZ2
-
-structure Summary where
-  passed : Nat := 0
-  failed : Nat := 0
-deriving Repr
-
-inductive TestOutcome where
-  | pass
-  | fail (message : String)
-deriving Repr
-
-structure TestCase where
-  name : String
-  run : IO TestOutcome
-
-private def hexValue? (c : Char) : Option Nat :=
-  if '0' ≤ c ∧ c ≤ '9' then
-    some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c ∧ c ≤ 'f' then
-    some (10 + c.toNat - 'a'.toNat)
-  else if 'A' ≤ c ∧ c ≤ 'F' then
-    some (10 + c.toNat - 'A'.toNat)
-  else
-    none
-
-private def decodeHexAux : List Char → List UInt8 → Except String ByteArray
-  | [], acc => .ok <| ByteArray.mk acc.reverse.toArray
-  | [_], _ => .error "Fixture hex has odd length."
-  | hi :: lo :: rest, acc =>
-      match hexValue? hi, hexValue? lo with
-      | some hiVal, some loVal =>
-          decodeHexAux rest (UInt8.ofNat (hiVal * 16 + loVal) :: acc)
-      | _, _ => .error "Fixture hex contains a non-hex character."
-
-private def loadFixture (name : String) : IO (Except String ByteArray) := do
-  let path : System.FilePath := s!"tests/fixtures/bz2/{name}"
-  let raw ← IO.FS.readFile path
-  let hexChars := raw.toList.filter (fun c => hexValue? c |>.isSome)
-  pure <| decodeHexAux hexChars []
-
-private def byteArrayOfList (xs : List UInt8) : ByteArray :=
-  ByteArray.mk xs.toArray
-
-private def appendByteArray (left right : ByteArray) : ByteArray :=
-  right.foldl ByteArray.push left
-
-private def replaceByteAtAux : List UInt8 → Nat → UInt8 → List UInt8
-  | [], _, _ => []
-  | _ :: rest, 0, value => value :: rest
-  | byte :: rest, index + 1, value => byte :: replaceByteAtAux rest index value
-
-private def replaceByteAt (bytes : ByteArray) (index : Nat) (value : UInt8) : ByteArray :=
-  byteArrayOfList <| replaceByteAtAux bytes.toList index value
-
-private def removeIfExists (path : System.FilePath) : IO Unit := do
-  if (← path.pathExists) then
-    IO.FS.removeFile path
-
-private def runSystemBzip2 (args : Array String) : IO (Except String Unit) := do
-  let out ← IO.Process.output { cmd := "/usr/bin/bzip2", args := args }
-  if out.exitCode = 0 then
-    pure (.ok ())
-  else
-    pure (.error s!"exit {out.exitCode}: {out.stderr}")
 
 private def exactHeaderCase : TestCase :=
   { name := "exact empty-stream header and eos"
@@ -273,21 +210,6 @@ private def cases : List TestCase :=
   , exactEncoderSystemBzip2Case
   , exactDecoderReadsSystemBzip2Case
   ]
-
-private def runCase (summary : Summary) (tc : TestCase) : IO Summary := do
-  match ← tc.run with
-  | .pass =>
-      IO.println s!"PASS {tc.name}"
-      pure { summary with passed := summary.passed + 1 }
-  | .fail message =>
-      IO.println s!"FAIL {tc.name}: {message}"
-      pure { summary with failed := summary.failed + 1 }
-
-private def runCases : Summary → List TestCase → IO Summary
-  | summary, [] => pure summary
-  | summary, tc :: rest => do
-      let summary' ← runCase summary tc
-      runCases summary' rest
 
 def main : IO Unit := do
   let summary ← runCases {} cases
