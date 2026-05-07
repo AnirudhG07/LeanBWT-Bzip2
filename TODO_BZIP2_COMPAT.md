@@ -79,34 +79,34 @@ them.
 
 Goal: decode real Linux-generated `.bz2` files.
 
-- [ ] Add a real bit reader.
+- [x] Add a real bit reader.
   - read 1 bit
   - read `n` bits
   - byte alignment helpers
   - EOF/error handling
-- [ ] Parse exact stream header:
+- [x] Parse exact stream header:
   - `BZh`
   - block-size digit `1` to `9`
-- [ ] Parse exact block header:
+- [x] Parse exact block header:
   - block magic
   - block CRC
   - randomised flag
   - `origPtr`
   - used-byte map
-- [ ] Parse Huffman metadata:
+- [x] Parse Huffman metadata:
   - number of Huffman groups
   - selector count
   - selector MTF list
   - code-length deltas
-- [ ] Build canonical Huffman decode tables from parsed lengths.
-- [ ] Decode Huffman-coded symbol stream.
-- [ ] Decode RUNA/RUNB into MTF positions.
-- [ ] Stop at the exact end-of-block symbol.
-- [ ] Invert MTF using the used-byte alphabet.
-- [ ] Invert BWT using `origPtr`.
-- [ ] Add initial-RLE1 decode after inverse BWT.
-- [ ] Decode concatenated `.bz2` streams.
-- [ ] Reject invalid CRCs and malformed streams with good errors.
+- [x] Build canonical Huffman decode tables from parsed lengths.
+- [x] Decode Huffman-coded symbol stream.
+- [x] Decode RUNA/RUNB into MTF positions.
+- [x] Stop at the exact end-of-block symbol.
+- [x] Invert MTF using the used-byte alphabet.
+- [x] Invert BWT using `origPtr`.
+- [x] Add initial-RLE1 decode after inverse BWT.
+- [x] Decode concatenated `.bz2` streams.
+- [x] Reject invalid CRCs and malformed streams with good errors.
 
 ## Phase 2: Exact `.bz2` Block Encoder
 

@@ -1,5 +1,6 @@
 import Bzip2.ByteCodec
 import Bzip2.Format.Binary
+import Bzip2.Format.BZ2
 
 /-!
 Public executable API for LeanBzip2.
@@ -7,6 +8,7 @@ Public executable API for LeanBzip2.
 This module is the main user-facing native layer:
 - in-memory `ByteArray` compression/decompression,
 - configurable block-size compression,
+- read-only exact `.bz2` decompression,
 - file helpers producing `.lbz2` archives,
 - legacy string helpers for the original abstract serialized payload.
 
@@ -44,6 +46,10 @@ def compressBinaryWithBlockSize? (blockSizeDigit : Nat) (data : ByteArray) :
 /-- Decompress raw bytes from the transitional binary-safe archive format. -/
 def decompressBinary? (archive : ByteArray) : Except String ByteArray :=
   Bzip2.Format.decompressBinary? archive
+
+/-- Decompress one or more concatenated exact `.bz2` streams. -/
+def decompressBz2? (archive : ByteArray) : Except String ByteArray :=
+  Bzip2.Format.BZ2.decompress? archive
 
 /-- Magic header for serialized string/file payloads produced by this library. -/
 def serializedMagic : String := "LEANBZIP2:1"

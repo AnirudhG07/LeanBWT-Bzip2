@@ -22,6 +22,31 @@ structure TestCase where
 def byteArrayOfList (xs : List UInt8) : ByteArray :=
   xs.foldl ByteArray.push ByteArray.empty
 
+private def hexValue? (c : Char) : Option Nat :=
+  if '0' ≤ c ∧ c ≤ '9' then
+    some (c.toNat - '0'.toNat)
+  else if 'a' ≤ c ∧ c ≤ 'f' then
+    some (10 + c.toNat - 'a'.toNat)
+  else if 'A' ≤ c ∧ c ≤ 'F' then
+    some (10 + c.toNat - 'A'.toNat)
+  else
+    none
+
+private def decodeHexAux : List Char → List UInt8 → Except String ByteArray
+  | [], acc => .ok <| byteArrayOfList acc.reverse
+  | [_], _ => .error "Fixture hex has odd length."
+  | hi :: lo :: rest, acc =>
+      match hexValue? hi, hexValue? lo with
+      | some hiVal, some loVal =>
+          decodeHexAux rest (UInt8.ofNat (hiVal * 16 + loVal) :: acc)
+      | _, _ => .error "Fixture hex contains a non-hex character."
+
+private def loadExactFixture (name : String) : IO (Except String ByteArray) := do
+  let path : System.FilePath := s!"tests/fixtures/bz2/{name}"
+  let raw ← IO.FS.readFile path
+  let hexChars := raw.toList.filter (fun c => hexValue? c |>.isSome)
+  pure <| decodeHexAux hexChars []
+
 private def bumpByte (b : UInt8) : UInt8 :=
   UInt8.ofNat (b.toNat + 1)
 
@@ -210,6 +235,22 @@ private def damagedSecondStreamCase : TestCase :=
     | .error err, _ => pure (.error s!"left compression error: {err}")
     | _, .error err => pure (.error s!"right compression error: {err}")
 
+private def exactLinuxFixtureCase : TestCase :=
+  { name := "decode Linux-generated .bz2"
+  , run := do
+      match ← loadExactFixture "banana_level1.bz2.hex" with
+      | .error err => pure <| .fail s!"fixture error: {err}"
+      | .ok archive =>
+          let expected := "banana\n".toUTF8
+          match decompressBz2? archive with
+          | .error err => pure <| .fail s!"exact decode error: {err}"
+          | .ok decoded =>
+              if decoded = expected then
+                pure .pass
+              else
+                pure <| .fail "exact `.bz2` fixture decoded incorrectly"
+  }
+
 private def smallCases : List TestCase :=
   [ roundtripCase "empty bytes" ByteArray.empty
   , roundtripCase "one byte" (byteArrayOfList [0x41])
@@ -270,8 +311,7 @@ private def pendingExactBz2Cases : List TestCase :=
       "Requires the exact bz2 canonical Huffman length decoder."
   , pendingCase "missing end-of-block symbol rejects"
       "Requires the exact bz2 end-of-block symbol stream."
-  , pendingCase "decode Linux-generated .bz2"
-      "Requires exact bz2 block decoding."
+  , exactLinuxFixtureCase
   , pendingCase "Linux bzip2 validates our output"
       "Requires exact bz2 block encoding."
   ]
