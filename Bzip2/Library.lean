@@ -22,6 +22,12 @@ def decompressPayload (payload : ByteCompressed) : ByteArray :=
 def compressBinary? (data : ByteArray) : Except String ByteArray :=
   Bzip2.Format.compressBinary? data
 
+/-- Compress raw bytes into a bz2-like archive using a `1`-through-`9` block-size digit. -/
+def compressBinaryWithBlockSize? (blockSizeDigit : Nat) (data : ByteArray) :
+    Except String ByteArray := do
+  let config ← Bzip2.Format.bz2LikeConfig? blockSizeDigit
+  Bzip2.Format.compressBinaryWithConfig? config data
+
 /-- Decompress raw bytes from the transitional binary-safe archive format. -/
 def decompressBinary? (archive : ByteArray) : Except String ByteArray :=
   Bzip2.Format.decompressBinary? archive
@@ -103,11 +109,11 @@ def decompress (data : ByteArray) : Option ByteArray :=
 
 /-- Default output path used by `compressFile`. -/
 def defaultCompressedPath (inputPath : System.FilePath) : System.FilePath :=
-  inputPath.addExtension "lbz"
+  inputPath.addExtension "lbz2"
 
 /-- Default output path used by `decompressFile`. -/
 def defaultDecompressedPath (inputPath : System.FilePath) : System.FilePath :=
-  if inputPath.extension == some "lbz" then
+  if inputPath.extension == some "lbz2" then
     inputPath.withExtension ""
   else
     inputPath.withExtension "out"

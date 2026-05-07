@@ -1,4 +1,5 @@
 import Bzip2
+import Bzip2.Format.Binary
 
 def byteArrayOfList (xs : List UInt8) : ByteArray :=
   xs.foldl ByteArray.push ByteArray.empty
@@ -12,12 +13,12 @@ private def overwriteAt : Nat → (UInt8 → UInt8) → List UInt8 → List UInt
   | n + 1, f, b :: bs => b :: overwriteAt n f bs
 
 /--
-Corrupt the first byte of the embedded Huffman payload.
-The top-level archive header is 13 bytes long:
-`magic(4) | version(1) | rawLen(u32) | crc(u32) | packedLen(u32)`.
+Corrupt the first byte of the first block payload in the bz2-like archive.
+The prefix before block payload bytes is:
+`BZh(4) | blockMagic(6) | blockCRC(u32) | rawLen(u32) | packedLen(u32)`.
 -/
 def corruptPackedPayload (bytes : ByteArray) : ByteArray :=
-  byteArrayOfList <| overwriteAt 13 bumpByte bytes.toList
+  byteArrayOfList <| overwriteAt 22 bumpByte bytes.toList
 
 def binaryTest : IO Unit := do
   let input := "The quick brown fox jumps over the lazy dog".toUTF8
@@ -46,6 +47,44 @@ def corruptionTest : IO Unit := do
           IO.println "Corruption test failed: damaged archive unexpectedly decoded"
       | .error _ =>
           IO.println "Corruption test passed"
+
+def multiBlockTest : IO Unit := do
+  let config : Bzip2.Format.StreamConfig :=
+    { blockSizeDigit := 1, blockBytes := 32 }
+  let input :=
+    byteArrayOfList <| (List.range 192).map (fun n => UInt8.ofNat (n % 251))
+  match Bzip2.Format.compressBinaryWithConfig? config input with
+  | .error err =>
+      IO.println s!"Multi-block test failed during compression: {err}"
+  | .ok archive =>
+      match decompressBinary? archive with
+      | .error err =>
+          IO.println s!"Multi-block test failed during decompression: {err}"
+      | .ok output =>
+          if output == input then
+            IO.println "Multi-block roundtrip passed"
+          else
+            IO.println "Multi-block roundtrip failed"
+
+def concatenatedStreamTest : IO Unit := do
+  let left := "left stream".toUTF8
+  let right := "right stream".toUTF8
+  match compressBinary? left, compressBinary? right with
+  | .ok leftArchive, .ok rightArchive =>
+      let concatenated := byteArrayOfList (leftArchive.toList ++ rightArchive.toList)
+      match decompressBinary? concatenated with
+      | .error err =>
+          IO.println s!"Concatenated-stream test failed during decompression: {err}"
+      | .ok output =>
+          let expected := byteArrayOfList (left.toList ++ right.toList)
+          if output == expected then
+            IO.println "Concatenated-stream test passed"
+          else
+            IO.println "Concatenated-stream test failed"
+  | .error err, _ =>
+      IO.println s!"Concatenated-stream test failed during first compression: {err}"
+  | _, .error err =>
+      IO.println s!"Concatenated-stream test failed during second compression: {err}"
 
 def stringTest : IO Unit := do
   let input := "The quick brown fox jumps over the lazy dog"
@@ -84,6 +123,10 @@ def main : IO Unit := do
   binaryTest
   IO.println "\nRunning corruption test..."
   corruptionTest
+  IO.println "\nRunning multi-block test..."
+  multiBlockTest
+  IO.println "\nRunning concatenated-stream test..."
+  concatenatedStreamTest
   IO.println "\nRunning string test..."
   stringTest
   IO.println "\nRunning file test..."
