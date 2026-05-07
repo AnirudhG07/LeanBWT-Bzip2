@@ -1,0 +1,62 @@
+import Bzip2.Correctness.BwtCorrectness
+
+/-!
+This file adds a byte-oriented API on top of the proved abstract BWT pipeline.
+It keeps the current list-based, sentinel-based development as the spec layer,
+and exposes a binary-safe in-memory interface over `ByteArray`.
+
+This is intentionally only a first step toward a real `.bz2` codec: it does
+not yet define an interoperable on-wire format.
+-/
+
+namespace Bzip2
+
+set_option autoImplicit false
+
+/-- Current proved compressed payload specialized to bytes. -/
+abbrev ByteCompressed := Compressed Nat
+
+/-- View a `ByteArray` as a list of bytes for the proved spec layer. -/
+def byteArrayToList (data : ByteArray) : List Nat :=
+  data.data.toList.map UInt8.toNat
+
+/-- Convert a list of bytes back into a `ByteArray`. -/
+def listToByteArray (xs : List Nat) : ByteArray :=
+  ByteArray.mk (xs.map UInt8.ofNat).toArray
+
+@[simp]
+theorem listToByteArray_byteArrayToList (data : ByteArray) :
+    listToByteArray (byteArrayToList data) = data := by
+  cases data with
+  | mk arr =>
+      simp [byteArrayToList, listToByteArray, List.map_map]
+      rw [← Array.toArray_toList (xs := arr)]
+      simp
+      apply congrArg List.toArray
+      nth_rewrite 2 [← List.map_id arr.toList]
+      apply List.map_congr_left
+      intro b hb
+      exact UInt8.toNat.inj (by simp)
+
+/-- Compress raw bytes using the proved abstract BWT pipeline. -/
+def compressBytes (data : ByteArray) : ByteCompressed :=
+  compress (byteArrayToList data)
+
+/-- Decompress a byte-specialized abstract payload back into raw bytes. -/
+def decompressBytes (c : ByteCompressed) : ByteArray :=
+  listToByteArray (decompress c)
+
+/-- Byte-oriented roundtrip inherited directly from the abstract correctness theorem. -/
+theorem decompressBytes_compressBytes_eq (data : ByteArray) :
+    decompressBytes (compressBytes data) = data := by
+  have hspec :
+      decompress (compress (byteArrayToList data)) = byteArrayToList data := by
+    simpa using (decompress_compress_eq (α := Nat) (xs := byteArrayToList data))
+  calc
+    decompressBytes (compressBytes data)
+        = listToByteArray (decompress (compress (byteArrayToList data))) := by
+            rfl
+    _ = listToByteArray (byteArrayToList data) := by rw [hspec]
+    _ = data := listToByteArray_byteArrayToList data
+
+end Bzip2

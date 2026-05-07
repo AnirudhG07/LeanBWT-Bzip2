@@ -1,10 +1,30 @@
-import Bzip2.BWT
+import Bzip2.ByteCodec
+import Bzip2.Format.Binary
 
 set_option autoImplicit false
 
 namespace BZip2
 
 open Bzip2
+
+/-- Binary-safe abstract payload specialized to bytes. -/
+abbrev ByteCompressed := Bzip2.ByteCompressed
+
+/-- Compress raw bytes to the current proved abstract payload. -/
+def compressPayload (data : ByteArray) : ByteCompressed :=
+  Bzip2.compressBytes data
+
+/-- Decompress the current proved abstract byte payload back to raw bytes. -/
+def decompressPayload (payload : ByteCompressed) : ByteArray :=
+  Bzip2.decompressBytes payload
+
+/-- Compress raw bytes into the transitional binary-safe archive format. -/
+def compressBinary? (data : ByteArray) : Except String ByteArray :=
+  Bzip2.Format.compressBinary? data
+
+/-- Decompress raw bytes from the transitional binary-safe archive format. -/
+def decompressBinary? (archive : ByteArray) : Except String ByteArray :=
+  Bzip2.Format.decompressBinary? archive
 
 /-- Magic header for serialized string/file payloads produced by this library. -/
 def serializedMagic : String := "LEANBZIP2:1"
@@ -69,52 +89,53 @@ Compress a `ByteArray`.
 Returns the compressed data as a `ByteArray`.
 -/
 def compress (data : ByteArray) : ByteArray :=
-  match String.fromUTF8? data with
-  | some s => (compressString s).toUTF8
-  | none => ByteArray.empty -- Fallback for invalid UTF-8
+  match compressBinary? data with
+  | .ok out => out
+  | .error _ => ByteArray.empty
 
 /--
 Decompress a `ByteArray`.
 -/
 def decompress (data : ByteArray) : Option ByteArray :=
-  match String.fromUTF8? data with
-  | some s => 
-      match decompressString? s with
-      | .ok decompressed => some decompressed.toUTF8
-      | .error _ => none
-  | none => none
+  match decompressBinary? data with
+  | .ok out => some out
+  | .error _ => none
 
 /-- Default output path used by `compressFile`. -/
 def defaultCompressedPath (inputPath : System.FilePath) : System.FilePath :=
-  inputPath.addExtension "bzip2"
+  inputPath.addExtension "lbz"
 
 /-- Default output path used by `decompressFile`. -/
 def defaultDecompressedPath (inputPath : System.FilePath) : System.FilePath :=
-  if inputPath.extension == some "bzip2" then
+  if inputPath.extension == some "lbz" then
     inputPath.withExtension ""
   else
     inputPath.withExtension "out"
 
 /--
-Compress the contents of `inputPath` and write the serialized payload to `outputPath`.
+Compress the contents of `inputPath` and write the binary archive payload to `outputPath`.
 -/
 def compressFile (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
     IO System.FilePath := do
   let outputPath := outputPath.getD (defaultCompressedPath inputPath)
-  let contents ← IO.FS.readFile inputPath
-  IO.FS.writeFile outputPath (compressString contents)
+  let contents ← IO.FS.readBinFile inputPath
+  match compressBinary? contents with
+  | .ok archive =>
+      IO.FS.writeBinFile outputPath archive
+  | .error err =>
+      throw <| IO.userError err
   return outputPath
 
 /--
-Decompress the serialized payload stored at `inputPath` and write the decoded text to `outputPath`.
+Decompress the binary archive stored at `inputPath` and write the decoded bytes to `outputPath`.
 -/
 def decompressFile (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
     IO System.FilePath := do
   let outputPath := outputPath.getD (defaultDecompressedPath inputPath)
-  let encoded ← IO.FS.readFile inputPath
-  match decompressString? encoded with
+  let encoded ← IO.FS.readBinFile inputPath
+  match decompressBinary? encoded with
   | .ok decoded =>
-      IO.FS.writeFile outputPath decoded
+      IO.FS.writeBinFile outputPath decoded
       return outputPath
   | .error err =>
       throw <| IO.userError err
