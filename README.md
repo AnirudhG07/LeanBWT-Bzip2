@@ -1,10 +1,19 @@
 # Bzip2
 
-Lean 4 Bzip2 Library from Burrows-Wheeler-transformation.
+Lean 4 Bzip2 Library for compression using Burrows Wheeler transformation algorithm(BWT).
 
 - compressing and decompressing `String` values
 - compressing a file to a `.bzip2`-named payload
 - decompressing that payload back into a file
+
+> This library was made with help of Codex.
+
+## Features and Proofs
+
+- The BWT algorithm and its inverse are implemented and proven correct.
+- Run-length encoding is implemented and proven correct.
+- The full compression and decompression pipeline is implemented.
+- Only Lean4's libraries are used, no external non-lean dependencies.
 
 ## Installation
 

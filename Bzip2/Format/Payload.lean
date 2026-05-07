@@ -2,98 +2,143 @@ import Bzip2.ByteCodec
 import Bzip2.Format.Bytes
 
 /-!
-Binary serialization for the current abstract byte-specialized compressed
-payload. This is still a transitional container, but it is binary-safe and no
-longer routes data through UTF-8 text encoding.
+Binary serialization for a bz2-like block payload built from the current proved
+byte-specialized compressed payload.
+
+This no longer stores the whole abstract payload as a custom tagged blob.
+Instead, it uses fields closer to a real bzip2 block:
+- `randomised` (always `0`) plus `origPtr`,
+- a used-byte symbol map,
+- the MTF/RLE payload entries.
 -/
 
 namespace Bzip2.Format
 
 set_option autoImplicit false
 
-private def payloadMagic : List UInt8 :=
-  [0x4c, 0x42, 0x50, 0x31] -- "LBP1"
+private def bitMaskAt (i : Nat) : Nat :=
+  2 ^ (15 - i)
 
-private def encodeSymbolByte (s : Symbol Nat) : Except String (List UInt8)
-  := match s with
-  | none => .ok [0]
-  | some n =>
-      if n < 256 then
-        .ok [1, UInt8.ofNat n]
+private def bitIsSet (mask i : Nat) : Bool :=
+  (mask / bitMaskAt i) % 2 = 1
+
+private def countSentinels : List (Symbol Nat) → Nat
+  | [] => 0
+  | none :: xs => countSentinels xs + 1
+  | some _ :: xs => countSentinels xs
+
+private def usedBytesOfAlphabet (alphabet : List (Symbol Nat)) : Except String (List Nat) := do
+  if countSentinels alphabet ≠ 1 then
+    throw "Block alphabet must contain the sentinel exactly once."
+  let usedBytes := alphabet.filterMap id
+  if usedBytes.eraseDups.length ≠ usedBytes.length then
+    throw "Block alphabet contains duplicate byte symbols."
+  if usedBytes.any (fun n => 255 < n) then
+    throw "Block alphabet contains a symbol outside byte range."
+  pure usedBytes
+
+private def groupMask (group : Nat) (usedBytes : List Nat) : Nat :=
+  (List.range 16).foldl
+    (fun acc offset =>
+      if group * 16 + offset ∈ usedBytes then
+        acc + bitMaskAt offset
       else
-        .error "Payload alphabet contains a symbol outside byte range."
+        acc)
+    0
 
-private def decodeSymbolByte : List UInt8 → Except String (Symbol Nat × List UInt8)
-  | [] => .error "Unexpected end of input while decoding alphabet symbol."
-  | 0 :: rest => .ok (none, rest)
-  | 1 :: b :: rest => .ok (some b.toNat, rest)
-  | _ :: _ => .error "Invalid alphabet symbol tag."
+private def groupBitmap (usedBytes : List Nat) : Nat :=
+  (List.range 16).foldl
+    (fun acc group =>
+      if groupMask group usedBytes = 0 then
+        acc
+      else
+        acc + bitMaskAt group)
+    0
 
-private def encodeAlphabet : List (Symbol Nat) → Except String (List UInt8)
-  | [] => .ok []
-  | s :: ss => do
-      let head ← encodeSymbolByte s
-      let tail ← encodeAlphabet ss
-      pure (head ++ tail)
+private def encodeUsedByteMap (alphabet : List (Symbol Nat)) : Except String (List UInt8) := do
+  let usedBytes ← usedBytesOfAlphabet alphabet
+  let groups := groupBitmap usedBytes
+  let groupMasks :=
+    (List.range 16).foldl
+      (fun acc group =>
+        let mask := groupMask group usedBytes
+        if mask = 0 then
+          acc
+        else
+          acc ++ u16ToBytes mask)
+      []
+  pure (u16ToBytes groups ++ groupMasks)
 
-private def decodeAlphabet :
-    Nat → List UInt8 → Except String (List (Symbol Nat) × List UInt8)
-  | 0, rest => .ok ([], rest)
-  | n + 1, rest => do
-      let (head, rest') ← decodeSymbolByte rest
-      let (tail, rest'') ← decodeAlphabet n rest'
-      pure (head :: tail, rest'')
+private def bytesFromGroupMask (group mask : Nat) : List Nat :=
+  (List.range 16).filterMap (fun offset =>
+    if bitIsSet mask offset then
+      some (group * 16 + offset)
+    else
+      none)
+
+private def decodeUsedByteMapAux :
+    Nat → Nat → Nat → List UInt8 → Except String (List Nat × List UInt8)
+  | 0, _, _, rest => pure ([], rest)
+  | fuel + 1, group, groupsBitmap, rest =>
+      if bitIsSet groupsBitmap group then do
+        let (mask, rest') ← readU16 rest
+        let (tail, rest'') ← decodeUsedByteMapAux fuel (group + 1) groupsBitmap rest'
+        pure (bytesFromGroupMask group mask ++ tail, rest'')
+      else
+        decodeUsedByteMapAux fuel (group + 1) groupsBitmap rest
+
+private def decodeUsedByteMap (rest : List UInt8) :
+    Except String (List (Symbol Nat) × List UInt8) := do
+  let (groupsBitmap, rest') ← readU16 rest
+  let (usedBytes, rest'') ← decodeUsedByteMapAux 16 0 groupsBitmap rest'
+  pure (none :: usedBytes.map some, rest'')
 
 private def encodePayloadEntries : List (Nat × Nat) → Except String (List UInt8)
   | [] => .ok []
   | (v, n) :: rest => do
-      if v > U32Max then
-        throw "Payload value exceeds UInt32 limit."
+      if v > U16Max then
+        throw "Payload MTF value exceeds UInt16 limit."
       if n > U32Max then
         throw "Payload run length exceeds UInt32 limit."
       let tail ← encodePayloadEntries rest
-      pure (u32ToBytes v ++ u32ToBytes n ++ tail)
+      pure (u16ToBytes v ++ u32ToBytes n ++ tail)
 
 private def decodePayloadEntries :
     Nat → List UInt8 → Except String (List (Nat × Nat) × List UInt8)
   | 0, rest => .ok ([], rest)
   | n + 1, rest => do
-      let (v, rest1) ← readU32 rest
+      let (v, rest1) ← readU16 rest
       let (count, rest2) ← readU32 rest1
       let (tail, rest3) ← decodePayloadEntries n rest2
       pure ((v, count) :: tail, rest3)
 
-/-- Serialize the current abstract byte payload into a binary-safe representation. -/
+/-- Serialize the current abstract byte payload into a bz2-like block payload. -/
 def encodePayload (payload : Bzip2.ByteCompressed) : Except String ByteArray := do
-  if payload.primary > U32Max then
-    throw "Primary index exceeds UInt32 limit."
-  if payload.alphabet.length > U16Max then
-    throw "Alphabet size exceeds UInt16 limit."
+  if payload.primary > U24Max then
+    throw "Primary index exceeds UInt24 limit."
   if payload.payload.length > U32Max then
     throw "Payload entry count exceeds UInt32 limit."
-  let alphaBytes ← encodeAlphabet payload.alphabet
+  let symbolMap ← encodeUsedByteMap payload.alphabet
   let body ← encodePayloadEntries payload.payload
   pure <| byteArrayOfList <|
-    payloadMagic
-    ++ u32ToBytes payload.primary
-    ++ u16ToBytes payload.alphabet.length
-    ++ alphaBytes
+    [0]
+    ++ u24ToBytes payload.primary
+    ++ symbolMap
     ++ u32ToBytes payload.payload.length
     ++ body
 
-/-- Deserialize the current abstract byte payload from its binary-safe representation. -/
+/-- Deserialize the current abstract byte payload from the bz2-like block payload. -/
 def decodePayload (bytes : ByteArray) : Except String Bzip2.ByteCompressed := do
   let raw := bytes.toList
-  let (magic, rest0) ← takeN 4 raw
-  if magic ≠ payloadMagic then
-    throw "Invalid payload magic header."
-  let (primary, rest1) ← readU32 rest0
-  let (alphaCount, rest2) ← readU16 rest1
-  let (alphabet, rest3) ← decodeAlphabet alphaCount rest2
-  let (payloadCount, rest4) ← readU32 rest3
-  let (entries, rest5) ← decodePayloadEntries payloadCount rest4
-  if rest5 ≠ [] then
-    throw "Trailing bytes remain after decoding payload."
+  let (randomised, rest0) ← readByte raw
+  if randomised ≠ 0 then
+    throw "Randomised blocks are not supported."
+  let (primary, rest1) ← readU24 rest0
+  let (alphabet, rest2) ← decodeUsedByteMap rest1
+  let (payloadCount, rest3) ← readU32 rest2
+  let (entries, rest4) ← decodePayloadEntries payloadCount rest3
+  if rest4 ≠ [] then
+    throw "Trailing bytes remain after decoding block payload."
   pure
     { primary := primary
     , alphabet := alphabet

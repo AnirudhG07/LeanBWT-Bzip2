@@ -12,6 +12,7 @@ namespace Bzip2.Format
 set_option autoImplicit false
 
 abbrev U16Max : Nat := 65535
+abbrev U24Max : Nat := 16777215
 abbrev U32Max : Nat := 4294967295
 
 def byteArrayOfList (xs : List UInt8) : ByteArray :=
@@ -19,6 +20,9 @@ def byteArrayOfList (xs : List UInt8) : ByteArray :=
 
 def u16ToBytes (n : Nat) : List UInt8 :=
   [UInt8.ofNat (n / 256), UInt8.ofNat n]
+
+def u24ToBytes (n : Nat) : List UInt8 :=
+  [UInt8.ofNat (n / 65536), UInt8.ofNat (n / 256), UInt8.ofNat n]
 
 def u32ToBytes (n : Nat) : List UInt8 :=
   [ UInt8.ofNat (n / 16777216)
@@ -43,6 +47,13 @@ def readU16 : List UInt8 → Except String (Nat × List UInt8) := fun bs => do
   match raw with
   | [b1, b2] => pure (b1.toNat * 256 + b2.toNat, rest)
   | _ => .error "Invalid input while reading UInt16."
+
+def readU24 : List UInt8 → Except String (Nat × List UInt8) := fun bs => do
+  let (raw, rest) ← takeN 3 bs
+  match raw with
+  | [b1, b2, b3] =>
+      pure (b1.toNat * 65536 + b2.toNat * 256 + b3.toNat, rest)
+  | _ => .error "Invalid input while reading UInt24."
 
 def readU32 : List UInt8 → Except String (Nat × List UInt8) := fun bs => do
   let (raw, rest) ← takeN 4 bs
