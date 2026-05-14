@@ -38,80 +38,76 @@ structure EntropyInput where
   symbols : List Nat
 deriving DecidableEq
 
-private def appendByteArray (left right : ByteArray) : ByteArray :=
-  right.foldl ByteArray.push left
+private def appendRepeatedByte (out : ByteArray) (byte : UInt8) (count : Nat) : ByteArray :=
+  Id.run do
+    let mut out := out
+    for _ in [0:count] do
+      out := out.push byte
+    pure out
 
-private def spanRunAux (byte : UInt8) : Nat → List UInt8 → Nat × List UInt8
-  | count, [] => (count, [])
-  | count, next :: rest =>
-      if next = byte then
-        spanRunAux byte (count + 1) rest
-      else
-        (count, next :: rest)
+private def appendRle1Chunk (out : ByteArray) (byte : UInt8) (chunkLen : Nat) : ByteArray :=
+  if chunkLen ≤ 3 then
+    appendRepeatedByte out byte chunkLen
+  else
+    let out := appendRepeatedByte out byte 4
+    out.push (UInt8.ofNat (chunkLen - 4))
 
-private def spanRun (byte : UInt8) (rest : List UInt8) : Nat × List UInt8 :=
-  spanRunAux byte 1 rest
+private def rle1ChunkEncodedSize (chunkLen : Nat) : Nat :=
+  if chunkLen ≤ 3 then chunkLen else 5
 
-private def replicateByte (count : Nat) (byte : UInt8) : ByteArray :=
-  Bzip2.Format.byteArrayOfList (List.replicate count byte)
-
-private def runTokens (byte : UInt8) : Nat → List (ByteArray × ByteArray)
-  | 0 => []
-  | 1 => [(replicateByte 1 byte, replicateByte 1 byte)]
-  | 2 => [(replicateByte 1 byte, replicateByte 1 byte), (replicateByte 1 byte, replicateByte 1 byte)]
-  | 3 =>
-      [ (replicateByte 1 byte, replicateByte 1 byte)
-      , (replicateByte 1 byte, replicateByte 1 byte)
-      , (replicateByte 1 byte, replicateByte 1 byte)
-      ]
-  | count =>
-      let chunkLen := min count 255
-      let head :=
-        ( replicateByte chunkLen byte
-        , Bzip2.Format.byteArrayOfList [byte, byte, byte, byte, UInt8.ofNat (chunkLen - 4)]
-        )
-      if count = chunkLen then
-        [head]
-      else
-        head :: runTokens byte (count - chunkLen)
-
-private def tokenizeRunsWithFuel : Nat → List UInt8 → List (ByteArray × ByteArray)
-  | 0, _ => []
-  | _ + 1, [] => []
-  | fuel + 1, byte :: rest =>
-      let (count, tail) := spanRun byte rest
-      runTokens byte count ++ tokenizeRunsWithFuel fuel tail
-
-private def tokenizeRuns (bytes : List UInt8) : List (ByteArray × ByteArray) :=
-  tokenizeRunsWithFuel bytes.length bytes
+private def spanRun (input : ByteArray) (start : Nat) : Nat :=
+  Id.run do
+    let byte := input[start]!
+    let mut count := 1
+    let mut index := start + 1
+    while index < input.size && input[index]! = byte do
+      count := count + 1
+      index := index + 1
+    pure count
 
 /-- Encode one block with the initial bzip2 RLE1 transform. -/
 def encodeInitialRLE (input : ByteArray) : ByteArray :=
-  let tokens := tokenizeRuns input.toList
-  tokens.foldl (fun out token => appendByteArray out token.2) ByteArray.empty
+  Id.run do
+    let mut out := ByteArray.empty
+    let mut index := 0
+    while index < input.size do
+      let byte := input[index]!
+      let runLen := spanRun input index
+      let mut remaining := runLen
+      while remaining > 0 do
+        let chunkLen := min remaining 255
+        out := appendRle1Chunk out byte chunkLen
+        remaining := remaining - chunkLen
+      index := index + runLen
+    pure out
 
 /-- Split input bytes into exact `.bz2` blocks without breaking RLE1 tokens. -/
 def prepareBlocks (blockSize : Nat) (input : ByteArray) : Except String (List PreparedBlock) := do
   if blockSize = 0 then
     throw "Exact `.bz2` block size must be positive."
-  let tokens := tokenizeRuns input.toList
-  let blocks :=
-    Id.run do
-      let mut blocks : List PreparedBlock := []
-      let mut currentOriginal := ByteArray.empty
-      let mut currentRle1 := ByteArray.empty
-      for token in tokens do
-        let originalTok := token.1
-        let rleTok := token.2
-        if currentRle1.size > 0 && blockSize < currentRle1.size + rleTok.size then
+  let blocks := Id.run do
+    let mut blocks : List PreparedBlock := []
+    let mut currentOriginal := ByteArray.empty
+    let mut currentRle1 := ByteArray.empty
+    let mut index := 0
+    while index < input.size do
+      let byte := input[index]!
+      let runLen := spanRun input index
+      let mut remaining := runLen
+      while remaining > 0 do
+        let chunkLen := min remaining 255
+        let rleChunkSize := rle1ChunkEncodedSize chunkLen
+        if currentRle1.size > 0 && blockSize < currentRle1.size + rleChunkSize then
           blocks := { original := currentOriginal, rle1 := currentRle1 } :: blocks
           currentOriginal := ByteArray.empty
           currentRle1 := ByteArray.empty
-        currentOriginal := appendByteArray currentOriginal originalTok
-        currentRle1 := appendByteArray currentRle1 rleTok
-      if currentRle1.size > 0 then
-        blocks := { original := currentOriginal, rle1 := currentRle1 } :: blocks
-      pure blocks.reverse
+        currentOriginal := appendRepeatedByte currentOriginal byte chunkLen
+        currentRle1 := appendRle1Chunk currentRle1 byte chunkLen
+        remaining := remaining - chunkLen
+      index := index + runLen
+    if currentRle1.size > 0 then
+      blocks := { original := currentOriginal, rle1 := currentRle1 } :: blocks
+    pure blocks.reverse
   pure blocks
 
 private def rotationLEAux (bytes : ByteArray) (n i j offset : Nat) : Nat → Bool

@@ -26,55 +26,77 @@ private def pairKey (ranks : Array Nat) (n step idx : Nat) : Nat × Nat :=
   let next := (idx + step) % n
   (ranks[idx]!, ranks[next]!)
 
-private def rotationPairLE (ranks : Array Nat) (n step i j : Nat) : Bool :=
-  let left := pairKey ranks n step i
-  let right := pairKey ranks n step j
-  if left.1 < right.1 then
-    true
-  else if right.1 < left.1 then
-    false
-  else if left.2 < right.2 then
-    true
-  else if right.2 < left.2 then
-    false
-  else
-    decide (i ≤ j)
-
 private def initialRanks (input : ByteArray) : Array Nat :=
   Array.ofFn (fun i : Fin input.size => input[i.1]!.toNat)
 
+private def countingSortBy
+    (order : Array Nat)
+    (keyBound : Nat)
+    (key : Nat → Nat) :
+    Array Nat :=
+  Id.run do
+    let mut counts := Array.replicate keyBound 0
+    for idx in order do
+      let bucket := key idx
+      counts := counts.set! bucket (counts[bucket]! + 1)
+    let mut starts := Array.replicate keyBound 0
+    let mut offset := 0
+    for bucket in [0:keyBound] do
+      starts := starts.set! bucket offset
+      offset := offset + counts[bucket]!
+    let mut out := Array.replicate order.size 0
+    for idx in order do
+      let bucket := key idx
+      let position := starts[bucket]!
+      out := out.set! position idx
+      starts := starts.set! bucket (position + 1)
+    pure out
+
+private def sortRotationPairs
+    (ranks : Array Nat)
+    (n step classCount : Nat)
+    (order : Array Nat) :
+    Array Nat :=
+  let bySecond :=
+    countingSortBy order classCount (fun idx => ranks[((idx + step) % n)]!)
+  countingSortBy bySecond classCount (fun idx => ranks[idx]!)
+
 private def buildNextRanks
-    (ranks : Array Nat) (n step : Nat) (order : List Nat) :
+    (ranks : Array Nat) (n step : Nat) (order : Array Nat) :
     Array Nat × Nat :=
   Id.run do
     let mut nextRanks := Array.replicate n 0
-    match order with
-    | [] => pure (nextRanks, 0)
-    | first :: rest =>
-        nextRanks := nextRanks.set! first 0
-        let mut distinctRanks := 1
-        let mut previousKey := pairKey ranks n step first
-        for idx in rest do
-          let key := pairKey ranks n step idx
-          if key ≠ previousKey then
-            distinctRanks := distinctRanks + 1
-            previousKey := key
-          nextRanks := nextRanks.set! idx (distinctRanks - 1)
-        pure (nextRanks, distinctRanks)
+    if order.isEmpty then
+      pure (nextRanks, 0)
+    else
+      let first := order[0]!
+      nextRanks := nextRanks.set! first 0
+      let mut distinctRanks := 1
+      let mut previousKey := pairKey ranks n step first
+      for i in [1:order.size] do
+        let idx := order[i]!
+        let key := pairKey ranks n step idx
+        if key ≠ previousKey then
+          distinctRanks := distinctRanks + 1
+          previousKey := key
+        nextRanks := nextRanks.set! idx (distinctRanks - 1)
+      pure (nextRanks, distinctRanks)
 
-private def sortedRotationIndices (input : ByteArray) : List Nat :=
+private def sortedRotationIndices (input : ByteArray) : Array Nat :=
   let n := input.size
   if n = 0 then
-    []
+    #[]
   else
     Id.run do
-      let mut order := List.range n
+      let mut order := Array.range n
       let mut ranks := initialRanks input
+      let mut classCount := 256
       let mut step := 1
       while step < n do
-        order := order.mergeSort (rotationPairLE ranks n step)
+        order := sortRotationPairs ranks n step classCount order
         let (nextRanks, distinctRanks) := buildNextRanks ranks n step order
         ranks := nextRanks
+        classCount := distinctRanks
         if distinctRanks = n then
           step := n
         else
@@ -89,8 +111,9 @@ def transformFastBWT (input : ByteArray) : FastBWTResult :=
   else
     let order := sortedRotationIndices input
     let lastColumn :=
-      Bzip2.Format.byteArrayOfList <|
-        order.map (fun start => input[((start + n - 1) % n)]!)
-    { lastColumn := lastColumn, origPtr := order.findIdx (· = 0) }
+      order.foldl
+        (fun out start => out.push input[((start + n - 1) % n)]!)
+        ByteArray.empty
+    { lastColumn := lastColumn, origPtr := order.findIdx? (· = 0) |>.getD 0 }
 
 end Bzip2.Format.BZ2

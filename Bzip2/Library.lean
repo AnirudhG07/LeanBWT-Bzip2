@@ -173,21 +173,6 @@ def compressFile (inputPath : System.FilePath) (outputPath : Option System.FileP
   return outputPath
 
 /--
-Compress the contents of `inputPath` as one exact `.bz2` stream and write the
-result to `outputPath`.
--/
-def compressBz2File (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
-    IO System.FilePath := do
-  let outputPath := outputPath.getD (defaultExactCompressedPath inputPath)
-  let contents ← IO.FS.readBinFile inputPath
-  match compressBz2? contents with
-  | .ok archive =>
-      IO.FS.writeBinFile outputPath archive
-  | .error err =>
-      throw <| IO.userError err
-  return outputPath
-
-/--
 Compress the contents of `inputPath` as one exact `.bz2` stream using a `1`
 through `9` block-size digit, and write the result to `outputPath`.
 -/
@@ -197,13 +182,33 @@ def compressBz2FileWithBlockSize
     (outputPath : Option System.FilePath := none) :
     IO System.FilePath := do
   let outputPath := outputPath.getD (defaultExactCompressedPath inputPath)
-  let contents ← IO.FS.readBinFile inputPath
-  match compressBz2WithBlockSize? blockSizeDigit contents with
-  | .ok archive =>
-      IO.FS.writeBinFile outputPath archive
-  | .error err =>
-      throw <| IO.userError err
+  let config ←
+    match Bzip2.Format.BZ2.streamConfig? blockSizeDigit with
+    | .ok config => pure config
+    | .error err => throw <| IO.userError err
+  let inputHandle ← IO.FS.Handle.mk inputPath .read
+  let mut state := Bzip2.Format.BZ2.StreamEncoderState.init config
+  let chunkSize : USize := config.blockSizeBytes.toUSize
+  let mut done := false
+  while !done do
+    let chunk ← inputHandle.read chunkSize
+    if chunk.isEmpty then
+      done := true
+    else
+      match Bzip2.Format.BZ2.StreamEncoderState.pushRawBlock? state chunk with
+      | .ok state' => state := state'
+      | .error err => throw <| IO.userError err
+  let archive := Bzip2.Format.BZ2.StreamEncoderState.finish state
+  IO.FS.writeBinFile outputPath archive
   return outputPath
+
+/--
+Compress the contents of `inputPath` as one exact `.bz2` stream and write the
+result to `outputPath`.
+-/
+def compressBz2File (inputPath : System.FilePath) (outputPath : Option System.FilePath := none) :
+    IO System.FilePath := do
+  compressBz2FileWithBlockSize 1 inputPath outputPath
 
 /--
 Decompress the binary archive stored at `inputPath` and write the decoded bytes to `outputPath`.
@@ -227,9 +232,9 @@ def decompressBz2File (inputPath : System.FilePath) (outputPath : Option System.
     IO System.FilePath := do
   let outputPath := outputPath.getD (defaultExactDecompressedPath inputPath)
   let encoded ← IO.FS.readBinFile inputPath
-  match decompressBz2? encoded with
-  | .ok decoded =>
-      IO.FS.writeBinFile outputPath decoded
+  let outputHandle ← IO.FS.Handle.mk outputPath .write
+  match ← Bzip2.Format.BZ2.decompressToHandle? encoded outputHandle with
+  | .ok _ =>
       return outputPath
   | .error err =>
       throw <| IO.userError err

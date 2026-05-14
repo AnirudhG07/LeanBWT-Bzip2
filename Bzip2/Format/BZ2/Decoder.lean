@@ -188,4 +188,51 @@ private partial def decodeStreams (reader : BitReader) (out : ByteArray) :
 def decompress? (archive : ByteArray) : Except String ByteArray :=
   decodeStreams (BitReader.ofByteArray archive) ByteArray.empty
 
+private partial def decodeSectionsToHandle
+    (header : StreamHeader) (reader : BitReader) (streamCRC : UInt32)
+    (handle : IO.FS.Handle) :
+    IO (Except String BitReader) := do
+  match parseSectionMarker reader with
+  | .error err => pure (.error err)
+  | .ok (.block, reader1) =>
+      match parseBlockSectionAfterMarker reader1 with
+      | .error err => pure (.error err)
+      | .ok (metadata, reader2) =>
+          match decodeBlockAfterMetadata header.blockSizeBytes metadata reader2 with
+          | .error err => pure (.error err)
+          | .ok (decoded, blockCRC, reader3) =>
+              handle.write decoded
+              let streamCRC' := combineStreamCRC streamCRC blockCRC
+              decodeSectionsToHandle header reader3 streamCRC' handle
+  | .ok (.eos, reader1) =>
+      match parseEndOfStreamAfterMarker reader1 with
+      | .error err => pure (.error err)
+      | .ok (trailer, reader2) =>
+          if trailer.streamCRC ≠ streamCRC then
+            pure (.error "Exact `.bz2` stream CRC mismatch.")
+          else
+            pure (.ok reader2.alignToByte)
+
+private partial def decodeStreamsToHandle
+    (reader : BitReader) (handle : IO.FS.Handle) :
+    IO (Except String Unit) := do
+  let reader := reader.alignToByte
+  if reader.bitsRemaining = 0 then
+    pure (.ok ())
+  else
+    match parseStreamHeader reader with
+    | .error err => pure (.error err)
+    | .ok (header, reader1) =>
+        match ← decodeSectionsToHandle header reader1 0 handle with
+        | .error err => pure (.error err)
+        | .ok reader2 => decodeStreamsToHandle reader2 handle
+
+/--
+Decompress one or more concatenated exact `.bz2` streams and write the decoded
+bytes directly to a file handle block by block.
+-/
+def decompressToHandle? (archive : ByteArray) (handle : IO.FS.Handle) :
+    IO (Except String Unit) :=
+  decodeStreamsToHandle (BitReader.ofByteArray archive) handle
+
 end Bzip2.Format.BZ2

@@ -29,6 +29,11 @@ deriving Inhabited, Repr
 def defaultStreamConfig : StreamConfig :=
   { blockSizeDigit := 1, blockSizeBytes := 100000 }
 
+/-- Incremental exact `.bz2` encoder state for file-oriented block processing. -/
+structure StreamEncoderState where
+  writer : BitWriter
+  streamCRC : UInt32
+
 /-- Build an exact `.bz2` configuration from the usual `1`-through-`9` digit. -/
 def streamConfig? (blockSizeDigit : Nat) : Except String StreamConfig := do
   if 1 ≤ blockSizeDigit ∧ blockSizeDigit ≤ 9 then
@@ -196,15 +201,46 @@ private def encodeBlocks (writer : BitWriter) (blocks : List EntropyInput) :
       pure (writer, combineStreamCRC streamCRC blockCRC))
     (writer, 0)
 
-/-- Compress bytes into one exact `.bz2` stream using the provided configuration. -/
-def compressWithConfig? (config : StreamConfig) (data : ByteArray) : Except String ByteArray := do
-  let prepared ← prepareBlocks config.blockSizeBytes data
-  let blocks := prepared.map prepareEntropyInput
+private def streamHeaderWriter (config : StreamConfig) : BitWriter :=
   let writer := BitWriter.empty
   let writer := writer.writeBits 8 0x42
   let writer := writer.writeBits 8 0x5A
   let writer := writer.writeBits 8 0x68
-  let writer := writer.writeBits 8 (48 + config.blockSizeDigit)
+  writer.writeBits 8 (48 + config.blockSizeDigit)
+
+/-- Initialize an incremental exact `.bz2` encoder. -/
+def StreamEncoderState.init (config : StreamConfig) : StreamEncoderState :=
+  { writer := streamHeaderWriter config, streamCRC := 0 }
+
+/--
+Append one raw input block to an incremental exact `.bz2` stream.
+
+The raw block is RLE1-encoded and transformed independently, matching the
+block-local structure of the exact wire format.
+-/
+def StreamEncoderState.pushRawBlock?
+    (state : StreamEncoderState) (rawBlock : ByteArray) :
+    Except String StreamEncoderState := do
+  let block : PreparedBlock :=
+    { original := rawBlock, rle1 := encodeInitialRLE rawBlock }
+  let entropy := prepareEntropyInput block
+  let (writer, blockCRC) ← encodeBlock state.writer entropy
+  pure
+    { writer := writer
+    , streamCRC := combineStreamCRC state.streamCRC blockCRC
+    }
+
+/-- Finalize an incremental exact `.bz2` stream into bytes. -/
+def StreamEncoderState.finish (state : StreamEncoderState) : ByteArray :=
+  let writer := state.writer.writeBits 48 endMagic
+  let writer := writer.writeBits 32 state.streamCRC.toNat
+  writer.toByteArray
+
+/-- Compress bytes into one exact `.bz2` stream using the provided configuration. -/
+def compressWithConfig? (config : StreamConfig) (data : ByteArray) : Except String ByteArray := do
+  let prepared ← prepareBlocks config.blockSizeBytes data
+  let blocks := prepared.map prepareEntropyInput
+  let writer := streamHeaderWriter config
   let (writer, streamCRC) ← encodeBlocks writer blocks
   let writer := writer.writeBits 48 endMagic
   let writer := writer.writeBits 32 streamCRC.toNat

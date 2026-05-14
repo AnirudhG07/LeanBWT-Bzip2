@@ -192,11 +192,17 @@ the current implementation.
 
 ### Large files
 
-- [ ] multi-megabyte text
-- [ ] multi-megabyte binary
-- [ ] highly repetitive large file
-- [ ] incompressible large file
-- [ ] files spanning many blocks
+- [x] multi-megabyte text
+- [x] multi-megabyte binary
+- [x] highly repetitive large file
+- [x] incompressible large file
+- [x] files spanning many blocks
+
+Notes:
+- The opt-in large harness now passes a 1 GiB shell baseline on a sparse file.
+- The same harness also passes exact sparse interop on the default 16 MiB
+  multi-block exact setting, plus multi-megabyte text/binary, incompressible
+  large-file, and many-block shell cases.
 
 ### Negative / robustness tests
 
@@ -293,10 +299,11 @@ We are done only when all of these are true:
 
 ## Immediate Next Task
 
-Start the fast native BWT split and the proof bridge:
+Move from the landed fast forward BWT toward refinement and full large-file execution:
 
-- add a new practical BWT / inverse-BWT implementation for execution without deleting the current proved construction
+- keep the new practical fast forward BWT in the runtime path without deleting the current proved construction
 - keep the original BWT development as the reference semantics for proofs
-- switch the executable exact encoder/decoder to the fast block-sorting BWT once it exists
-- then connect the fast BWT back to the reference BWT by refinement theorems
-- enable the currently guarded large-file exact interoperability tests after that native path lands
+- prove the fast forward BWT refines the original BWT construction
+- add the matching practical inverse-BWT / LF runtime path where needed
+- broaden the large exact corpus beyond the current sparse-file baseline
+- then push the file API toward fully streaming large-file execution
