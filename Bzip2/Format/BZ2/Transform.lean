@@ -1,4 +1,5 @@
 import Bzip2.Format.Bytes
+import Bzip2.Format.BZ2.FastBWT
 import Mathlib
 
 /-!
@@ -6,7 +7,7 @@ Exact `.bz2` block transform pipeline before entropy coding.
 
 This module contains the block-local transformations used by the exact writer:
 - initial RLE1 tokenization and block preparation,
-- standard `origPtr`-based BWT,
+- both the original rotation-based reference BWT and the practical fast BWT,
 - used-byte alphabet extraction,
 - MTF plus RUNA/RUNB encoding with end-of-block symbol.
 -/
@@ -132,8 +133,8 @@ private def rotationLE (bytes : ByteArray) (i j : Nat) : Bool :=
   else
     rotationLEAux bytes n i j 0 n
 
-/-- Standard cyclic-rotation BWT used by exact `.bz2` blocks. -/
-def transformBWT (input : ByteArray) : BWTBlock :=
+/-- Reference cyclic-rotation BWT kept for alignment with the original construction. -/
+def transformBWTReference (input : ByteArray) : BWTBlock :=
   let n := input.size
   if n = 0 then
     { lastColumn := ByteArray.empty, origPtr := 0 }
@@ -143,6 +144,17 @@ def transformBWT (input : ByteArray) : BWTBlock :=
       Bzip2.Format.byteArrayOfList <|
         sorted.map (fun start => input[((start + n - 1) % n)]!)
     { lastColumn := lastColumn, origPtr := sorted.findIdx (· = 0) }
+
+/--
+Practical exact `.bz2` BWT used by the runtime encoder.
+
+This delegates to the separate fast implementation while leaving
+`transformBWTReference` available for regression checks and future refinement
+proofs.
+-/
+def transformBWT (input : ByteArray) : BWTBlock :=
+  let fast := transformFastBWT input
+  { lastColumn := fast.lastColumn, origPtr := fast.origPtr }
 
 /-- Sorted list of byte values present in a pre-BWT block. -/
 def usedBytes (input : ByteArray) : List UInt8 :=

@@ -146,6 +146,30 @@ private def exactEncoderSelfRoundtripCase : TestCase :=
                 pure <| .fail "exact encoder did not self-roundtrip"
   }
 
+private def exactFastBWTMatchesReferenceCase : TestCase :=
+  { name := "fast exact BWT matches reference BWT on small blocks"
+  , run := do
+      let samples : List (String × ByteArray) :=
+        [ ("empty", ByteArray.empty)
+        , ("one-byte", byteArrayOfList [0x61])
+        , ("banana", "banana\n".toUTF8)
+        , ("repeated", byteArrayOfList ((List.replicate 12 0x41).map UInt8.ofNat))
+        , ("binary-mixed",
+            byteArrayOfList ([0, 255, 0, 255, 1, 2, 3, 4, 5, 250, 251, 13, 10].map UInt8.ofNat))
+        , ("periodic", "abcabcabcabc".toUTF8)
+        ]
+      let rec loop : List (String × ByteArray) → IO TestOutcome
+        | [] => pure .pass
+        | (label, input) :: rest =>
+            let reference := transformBWTReference input
+            let fast := transformBWT input
+            if fast = reference then
+              loop rest
+            else
+              pure <| .fail s!"BWT mismatch on sample {label}"
+      loop samples
+  }
+
 private def exactEncoderSystemBzip2Case : TestCase :=
   { name := "system bzip2 validates and decompresses our exact output"
   , run := do
@@ -206,6 +230,7 @@ private def cases : List TestCase :=
   , exactBananaDecodeCase
   , exactConcatenatedCase
   , exactCorruptBlockCrcCase
+  , exactFastBWTMatchesReferenceCase
   , exactEncoderSelfRoundtripCase
   , exactEncoderSystemBzip2Case
   , exactDecoderReadsSystemBzip2Case

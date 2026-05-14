@@ -18,6 +18,9 @@ We want all of the following to be true:
 ## Current State
 
 - [x] Abstract BWT, inverse BWT, MTF, and RLE pipeline proved correct.
+- [x] The original BWT construction remains the proved semantic reference.
+- [x] A separate fast runtime forward BWT now exists for the exact `.bz2`
+  encoder path.
 - [x] ByteArray-facing API exists.
 - [x] Block-oriented `BZh`-style outer stream exists.
 - [x] Per-block CRC and combined stream CRC exist.
@@ -32,6 +35,24 @@ We want all of the following to be true:
   - [x] concatenated-stream roundtrip
   - [x] corruption rejection
   - [x] full 256-byte alphabet roundtrip
+
+## BWT Strategy Going Forward
+
+We are **not** replacing the original proved BWT development.
+
+Instead, the project will keep two BWT layers side by side:
+
+- `Reference BWT`
+  - the current rotation-based construction
+  - proof-oriented
+  - retained as the mathematical specification and correctness anchor
+- `Native / Fast BWT`
+  - a new practical block-sorting implementation
+  - array/index based rather than rotation-matrix based
+  - used by the executable compressor/decompressor for real workloads
+
+The plan is to prove that the fast native BWT refines the original proved BWT,
+not to delete or rewrite the original proof development.
 
 ## Main Gap
 
@@ -53,12 +74,16 @@ Do this in order:
 
 1. Exact decoder for real `.bz2` blocks.
 2. Exact encoder for real `.bz2` blocks.
-3. Refinement proofs from abstract pipeline to real implementation.
-4. Large interoperability and regression test suite.
+3. Fast native BWT / inverse-BWT implementation for practical execution.
+4. Refinement proofs from abstract pipeline to real implementation.
+5. Large interoperability and regression test suite.
 
 Decoder-first is the right order because it gives us the exact wire-format model
 and lets us validate against system-produced `.bz2` files before we try to emit
 them.
+
+Now that exact `.bz2` interoperability is in place for practical small/medium
+inputs, the next scaling step is the fast native BWT layer.
 
 ## Phase 0: Freeze and Clean Boundaries
 
@@ -191,9 +216,15 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 ### 5.1 Semantic layering
 
+- [x] Introduce a separate fast native BWT layer without deleting the existing
+  proved BWT construction.
 - [ ] Define an exact block semantic model between the abstract pipeline and the
   bitstream.
 - [ ] Keep the current proved BWT/MTF/RLE core as the mathematical reference.
+- [ ] State the refinement target:
+  - original proved BWT = reference semantics
+  - fast native BWT = executable implementation
+  - exact `.bz2` encoder/decoder = wire-format realization of the native layer
 - [ ] Add a block-level semantic record for:
   - RLE1-processed data
   - BWT output and `origPtr`
@@ -214,6 +245,10 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 ### 5.3 Refinement theorems
 
+- [ ] Prove the fast native BWT agrees with the original proved BWT on each
+  block.
+- [ ] Prove the fast native inverse BWT agrees with the original proved inverse
+  BWT on each block.
 - [ ] Prove exact block decoder refines abstract block semantics.
 - [ ] Prove exact block encoder produces a bitstream representing the same
   abstract block semantics.
@@ -258,9 +293,10 @@ We are done only when all of these are true:
 
 ## Immediate Next Task
 
-Start Phase 4 and the proof bridge:
+Start the fast native BWT split and the proof bridge:
 
-- turn the remaining malformed exact-stream placeholders into real fixture-based tests
-- add larger corpus coverage once the native block sorter replaces the matrix-based spec path
-- define the exact block semantic model between the abstract BWT pipeline and the exact bitstream
-- begin the refinement lemmas for RLE1, RUNA/RUNB, selectors, canonical Huffman coding, and bit I/O
+- add a new practical BWT / inverse-BWT implementation for execution without deleting the current proved construction
+- keep the original BWT development as the reference semantics for proofs
+- switch the executable exact encoder/decoder to the fast block-sorting BWT once it exists
+- then connect the fast BWT back to the reference BWT by refinement theorems
+- enable the currently guarded large-file exact interoperability tests after that native path lands
