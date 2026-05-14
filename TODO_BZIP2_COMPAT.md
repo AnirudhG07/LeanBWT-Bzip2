@@ -178,9 +178,9 @@ the current implementation.
 - [x] bad magic
 - [x] bad block CRC
 - [x] bad stream CRC
-- [ ] malformed selector list
-- [ ] malformed code lengths
-- [ ] missing end-of-block symbol
+- [x] malformed selector list
+- [x] malformed code lengths
+- [x] missing end-of-block symbol
 - [x] truncated stream
 - [x] trailing garbage
 - [x] concatenated stream with second stream damaged

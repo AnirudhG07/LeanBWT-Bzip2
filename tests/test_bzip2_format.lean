@@ -1,8 +1,27 @@
 import Bzip2
 import Bzip2.Format.Binary
+import Bzip2.Format.BZ2.BitWriter
+import Bzip2.Format.BZ2.CRC
+import Bzip2.Format.BZ2.Canonical
+import Bzip2.Format.BZ2.Model
+import Bzip2.Format.BZ2.Transform
 import tests.test_bzip2
 
 set_option autoImplicit false
+
+private def runLocalSystemBzip2 (args : Array String) : IO (Except String Unit) := do
+  let out ← IO.Process.output { cmd := "bzip2", args := args }
+  if out.exitCode = 0 then
+    pure (.ok ())
+  else
+    pure (.error s!"exit {out.exitCode}: {out.stderr}")
+
+private def runLocalSystemBunzip2 (args : Array String) : IO (Except String Unit) := do
+  let out ← IO.Process.output { cmd := "bunzip2", args := args }
+  if out.exitCode = 0 then
+    pure (.ok ())
+  else
+    pure (.error s!"exit {out.exitCode}: {out.stderr}")
 
 private def bumpByte (b : UInt8) : UInt8 :=
   UInt8.ofNat (b.toNat + 1)
@@ -105,6 +124,17 @@ private def rejectionCase (name : String) (archiveThunk : IO (Except String Byte
           | .error _ => pure .pass
   }
 
+private def exactRejectionCase (name : String) (archiveThunk : IO (Except String ByteArray)) : TestCase :=
+  { name := name
+  , run := do
+      match ← archiveThunk with
+      | .error err => pure <| .fail s!"setup error: {err}"
+      | .ok archive =>
+          match decompressBz2? archive with
+          | .ok _ => pure <| .fail "damaged exact archive unexpectedly decoded"
+          | .error _ => pure .pass
+  }
+
 private def pendingCase (name reason : String) : TestCase :=
   { name := name
   , run := pure (.skip reason)
@@ -149,7 +179,7 @@ private def exactFileInteropCase : TestCase :=
       IO.FS.writeFile inputPath input
       try
         let compressedFile ← compressBz2File inputPath
-        match ← runSystemBzip2 #["-t", compressedFile.toString] with
+        match ← runLocalSystemBzip2 #["-t", compressedFile.toString] with
         | .error err => pure <| .fail s!"system test failed: {err}"
         | .ok _ =>
             let decompressedFile ← decompressBz2File compressedFile (some defaultOutput)
@@ -224,6 +254,154 @@ private def damagedSecondStreamCase : TestCase :=
     | .error err, _ => pure (.error s!"left compression error: {err}")
     | _, .error err => pure (.error s!"right compression error: {err}")
 
+private def exactBitMaskAt (index : Nat) : Nat :=
+  2 ^ (15 - index)
+
+private def exactGroupMask (group : Nat) (usedBytes : List UInt8) : Nat :=
+  (List.range 16).foldl
+    (fun acc offset =>
+      if UInt8.ofNat (group * 16 + offset) ∈ usedBytes then
+        acc + exactBitMaskAt offset
+      else
+        acc)
+    0
+
+private def exactGroupsBitmap (usedBytes : List UInt8) : Nat :=
+  (List.range 16).foldl
+    (fun acc group =>
+      if exactGroupMask group usedBytes = 0 then
+        acc
+      else
+        acc + exactBitMaskAt group)
+    0
+
+private def exactWriteUsedBytes (writer : Bzip2.Format.BZ2.BitWriter) (usedBytes : List UInt8) :
+    Bzip2.Format.BZ2.BitWriter :=
+  let writer := writer.writeBits 16 (exactGroupsBitmap usedBytes)
+  (List.range 16).foldl
+    (fun writer group =>
+      let mask := exactGroupMask group usedBytes
+      if mask = 0 then writer else writer.writeBits 16 mask)
+    writer
+
+private def exactWriteUnaryZeroTerminated
+    (writer : Bzip2.Format.BZ2.BitWriter) (count : Nat) :
+    Bzip2.Format.BZ2.BitWriter :=
+  (writer.writeRepeatedBit count true).writeBit false
+
+private def exactMinBitsForCount (count : Nat) : Nat :=
+  Id.run do
+    let mut bits := 0
+    while 2 ^ bits < count do
+      bits := bits + 1
+    pure bits
+
+private def uniformCodeLengths (alphaSize : Nat) : List Nat :=
+  List.replicate alphaSize (max 1 (exactMinBitsForCount alphaSize))
+
+private def exactWriteCodeLengthTable
+    (writer : Bzip2.Format.BZ2.BitWriter) (lengths : List Nat) :
+    Bzip2.Format.BZ2.BitWriter :=
+  Id.run do
+    let startLength := lengths.headD 0
+    let mut writer := writer.writeBits 5 startLength
+    let mut current := startLength
+    for target in lengths do
+      while current ≠ target do
+        writer := writer.writeBit true
+        if target < current then
+          writer := writer.writeBit true
+          current := current - 1
+        else
+          writer := writer.writeBit false
+          current := current + 1
+      writer := writer.writeBit false
+    pure writer
+
+private def exactWriteSymbolStream
+    (writer : Bzip2.Format.BZ2.BitWriter)
+    (table : Bzip2.Format.BZ2.CanonicalTable)
+    (symbols : List Nat) :
+    Except String Bzip2.Format.BZ2.BitWriter := do
+  symbols.foldlM
+    (fun writer symbol => do
+      let some entry := table.findEntry? symbol
+        | throw "Malformed exact-test builder lost a canonical Huffman symbol."
+      pure (writer.writeBits entry.bitLength entry.code))
+    writer
+
+private def exactEntropyInputOf (input : ByteArray) :
+    Except String Bzip2.Format.BZ2.EntropyInput := do
+  let blocks ← Bzip2.Format.BZ2.prepareBlocks 100000 input
+  match blocks with
+  | [block] => pure (Bzip2.Format.BZ2.prepareEntropyInput block)
+  | [] => throw "Malformed exact-test builder expected one non-empty block."
+  | _ => throw "Malformed exact-test builder expected a single exact block."
+
+private def exactArchivePrefix (entropy : Bzip2.Format.BZ2.EntropyInput) :
+    Bzip2.Format.BZ2.BitWriter × UInt32 :=
+  let blockCRC := Bzip2.Format.BZ2.crc32 entropy.original
+  let writer := Bzip2.Format.BZ2.BitWriter.empty
+  let writer := writer.writeBits 8 0x42
+  let writer := writer.writeBits 8 0x5A
+  let writer := writer.writeBits 8 0x68
+  let writer := writer.writeBits 8 49
+  let writer := writer.writeBits 48 Bzip2.Format.BZ2.blockMagic
+  let writer := writer.writeBits 32 blockCRC.toNat
+  let writer := writer.writeBit false
+  let writer := writer.writeBits 24 entropy.origPtr
+  let writer := exactWriteUsedBytes writer entropy.usedBytes
+  (writer, blockCRC)
+
+private def malformedSelectorArchive? : Except String ByteArray := do
+  let entropy ← exactEntropyInputOf "selector bug\n".toUTF8
+  let (writer, _) := exactArchivePrefix entropy
+  let writer := writer.writeBits 3 2
+  let writer := writer.writeBits 15 1
+  let writer := writer.writeBit true
+  let writer := writer.writeBit true
+  let writer := writer.writeBit false
+  pure writer.toByteArray
+
+private def malformedCodeLengthsArchive? : Except String ByteArray := do
+  let entropy ← exactEntropyInputOf "code lengths bug\n".toUTF8
+  let (writer, _) := exactArchivePrefix entropy
+  let writer := writer.writeBits 3 2
+  let writer := writer.writeBits 15 1
+  let writer := exactWriteUnaryZeroTerminated writer 0
+  let writer := writer.writeBits 5 21
+  pure writer.toByteArray
+
+private def missingEndOfBlockArchive? : Except String ByteArray := do
+  let entropy ← exactEntropyInputOf "missing eob\n".toUTF8
+  let alphaSize := entropy.usedBytes.length + 2
+  let lengths := uniformCodeLengths alphaSize
+  let canonical ← Bzip2.Format.BZ2.CanonicalTable.build lengths
+  let (writer, blockCRC) := exactArchivePrefix entropy
+  let writer := writer.writeBits 3 2
+  let writer := writer.writeBits 15 1
+  let writer := exactWriteUnaryZeroTerminated writer 0
+  let writer := exactWriteCodeLengthTable writer lengths
+  let writer := exactWriteCodeLengthTable writer lengths
+  let symbolsWithoutEob := entropy.symbols.take (entropy.symbols.length - 1)
+  let writer ← exactWriteSymbolStream writer canonical symbolsWithoutEob
+  let streamCRC := Bzip2.Format.BZ2.combineStreamCRC 0 blockCRC
+  let writer := writer.writeBits 48 Bzip2.Format.BZ2.endMagic
+  let writer := writer.writeBits 32 streamCRC.toNat
+  pure writer.toByteArray
+
+private def malformedSelectorListCase : TestCase :=
+  exactRejectionCase "malformed selector list rejects" do
+    pure malformedSelectorArchive?
+
+private def malformedCodeLengthsCase : TestCase :=
+  exactRejectionCase "malformed code lengths rejects" do
+    pure malformedCodeLengthsArchive?
+
+private def missingEndOfBlockCase : TestCase :=
+  exactRejectionCase "missing end-of-block symbol rejects" do
+    pure missingEndOfBlockArchive?
+
 private def exactLinuxFixtureCase : TestCase :=
   { name := "decode Linux-generated .bz2"
   , run := do
@@ -251,10 +429,10 @@ private def exactLinuxValidationCase : TestCase :=
         | .error err => pure <| .fail s!"exact encode error: {err}"
         | .ok archive =>
             IO.FS.writeBinFile archivePath archive
-            match ← runSystemBzip2 #["-t", archivePath.toString] with
+            match ← runLocalSystemBzip2 #["-t", archivePath.toString] with
             | .error err => pure <| .fail s!"system test failed: {err}"
             | .ok _ =>
-                match ← runSystemBzip2 #["-dkf", archivePath.toString] with
+                match ← runLocalSystemBzip2 #["-dkf", archivePath.toString] with
                 | .error err => pure <| .fail s!"system decompress failed: {err}"
                 | .ok _ =>
                     let decoded ← IO.FS.readBinFile outputPath
@@ -278,7 +456,7 @@ private def exactBunzip2ValidationCase : TestCase :=
         | .error err => pure <| .fail s!"exact encode error: {err}"
         | .ok archive =>
             IO.FS.writeBinFile archivePath archive
-            match ← runSystemBunzip2 #["-kf", archivePath.toString] with
+            match ← runLocalSystemBunzip2 #["-kf", archivePath.toString] with
             | .error err => pure <| .fail s!"system bunzip2 failed: {err}"
             | .ok _ =>
                 let decoded ← IO.FS.readBinFile outputPath
@@ -319,11 +497,11 @@ private def checkSystemDecodesOurExactArchive
     | .error err => pure (.error s!"exact encode error for block size -{digit} ({label}): {err}")
     | .ok archive =>
         IO.FS.writeBinFile archivePath archive
-        match ← runSystemBzip2 #["-t", archivePath.toString] with
+        match ← runLocalSystemBzip2 #["-t", archivePath.toString] with
         | .error err =>
             pure (.error s!"system bzip2 -t failed for block size -{digit} ({label}): {err}")
         | .ok _ =>
-            match ← runSystemBunzip2 #["-kf", archivePath.toString] with
+            match ← runLocalSystemBunzip2 #["-kf", archivePath.toString] with
             | .error err =>
                 pure (.error s!"system bunzip2 failed for block size -{digit} ({label}): {err}")
             | .ok _ =>
@@ -343,7 +521,7 @@ private def checkOurDecoderReadsSystemArchive
   let archivePath : System.FilePath := s!"tests/tmp_exact_phase3_system_{digit}_{index}_{label}.bin.bz2"
   try
     IO.FS.writeBinFile inputPath input
-    match ← runSystemBzip2 #[s!"-{digit}", "-kf", inputPath.toString] with
+    match ← runLocalSystemBzip2 #[s!"-{digit}", "-kf", inputPath.toString] with
     | .error err =>
         pure (.error s!"system compress failed for block size -{digit} ({label}): {err}")
     | .ok _ =>
@@ -377,7 +555,7 @@ private def exactConcatenatedInteropCase : TestCase :=
         match compressBz2WithBlockSize? 1 left, compressBz2WithBlockSize? 9 right with
         | .ok leftArchive, .ok rightArchive =>
             IO.FS.writeBinFile ourArchivePath (appendBytes leftArchive rightArchive)
-            match ← runSystemBunzip2 #["-kf", ourArchivePath.toString] with
+            match ← runLocalSystemBunzip2 #["-kf", ourArchivePath.toString] with
             | .error err => pure <| .fail s!"system bunzip2 failed on concatenated exact stream: {err}"
             | .ok _ =>
                 let systemDecoded ← IO.FS.readBinFile ourOutputPath
@@ -386,10 +564,10 @@ private def exactConcatenatedInteropCase : TestCase :=
                 else
                   IO.FS.writeBinFile sysLeftPath left
                   IO.FS.writeBinFile sysRightPath right
-                  match ← runSystemBzip2 #["-1", "-kf", sysLeftPath.toString] with
+                  match ← runLocalSystemBzip2 #["-1", "-kf", sysLeftPath.toString] with
                   | .error err => pure <| .fail s!"system compress failed for left concatenated source: {err}"
                   | .ok _ =>
-                      match ← runSystemBzip2 #["-9", "-kf", sysRightPath.toString] with
+                      match ← runLocalSystemBzip2 #["-9", "-kf", sysRightPath.toString] with
                       | .error err => pure <| .fail s!"system compress failed for right concatenated source: {err}"
                       | .ok _ =>
                           let sysLeftArchive ← IO.FS.readBinFile sysLeftArchivePath
@@ -469,12 +647,9 @@ private def negativeCases : List TestCase :=
   ]
 
 private def exactBz2Cases : List TestCase :=
-  [ pendingCase "malformed selector list rejects"
-      "Requires the exact bz2 Huffman-selector decoder."
-  , pendingCase "malformed code lengths rejects"
-      "Requires the exact bz2 canonical Huffman length decoder."
-  , pendingCase "missing end-of-block symbol rejects"
-      "Requires the exact bz2 end-of-block symbol stream."
+  [ malformedSelectorListCase
+  , malformedCodeLengthsCase
+  , missingEndOfBlockCase
   , exactLinuxFixtureCase
   , exactLinuxValidationCase
   , exactBunzip2ValidationCase

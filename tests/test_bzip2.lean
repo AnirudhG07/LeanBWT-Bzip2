@@ -112,14 +112,14 @@ def requireShellBzip2 (action : IO TestOutcome) : IO TestOutcome := do
   | some _ => action
 
 def runSystemBzip2 (args : Array String) : IO (Except String Unit) := do
-  let out ← IO.Process.output { cmd := "$(which bzip2)", args := args }
+  let out ← IO.Process.output { cmd := "bzip2", args := args }
   if out.exitCode = 0 then
     pure (.ok ())
   else
     pure (.error s!"exit {out.exitCode}: {out.stderr}")
 
 def runSystemBunzip2 (args : Array String) : IO (Except String Unit) := do
-  let out ← IO.Process.output { cmd := "$(which bunzip2)", args := args }
+  let out ← IO.Process.output { cmd := "bunzip2", args := args }
   if out.exitCode = 0 then
     pure (.ok ())
   else
