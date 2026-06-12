@@ -1,6 +1,8 @@
 import Bzip2.Correctness.BZ2.Bits
+import Bzip2.Correctness.BZ2.BitsReader
 import Bzip2.Correctness.BZ2.ZeroRun
 import Bzip2.Correctness.BZ2.RLE1
+import Bzip2.Correctness.BZ2.MtfRunaRunb
 
 /-!
 # Bzip2.Correctness.BZ2

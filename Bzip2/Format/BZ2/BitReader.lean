@@ -49,7 +49,7 @@ def BitReader.readBit (reader : BitReader) : Except String (Bool × BitReader) :
   else
     throw "Unexpected end of input while reading bit."
 
-private def readBitsAux : Nat → Nat → BitReader → Except String (Nat × BitReader)
+def readBitsAux : Nat → Nat → BitReader → Except String (Nat × BitReader)
   | 0, acc, reader => pure (acc, reader)
   | n + 1, acc, reader => do
       let (bit, reader') ← reader.readBit

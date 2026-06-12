@@ -245,19 +245,35 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 ### 5.2 New correctness lemmas
 
-- [ ] Prove initial RLE1 decode(encode xs) = xs.
+- [x] Prove initial RLE1 decode(encode xs) = xs.
+  - `decodeInitialRLE_encodeInitialRLE` in `Bzip2/Correctness/BZ2/RLE1.lean`,
+    via a run-decomposition token model (`runTokens`), a well-formedness
+    invariant on chunk streams, and the decoder's inversion of any well-formed
+    stream.
 - [x] Prove RUNA/RUNB decode(encode xs) = xs.
   - `decodeZeroRun_zeroRunDigits` in `Bzip2/Correctness/BZ2/ZeroRun.lean`
     proves the bijective base-2 RUNA/RUNB digit stream round-trips.
+- [x] Prove MTF + RUNA/RUNB payload decode(encode lastColumn) = lastColumn.
+  - `decodeMtfBody_encodeMtfRunaRunb` in `Bzip2/Correctness/BZ2/MtfRunaRunb.lean`,
+    via a structural model `runaRunbBody` proved equal to the runtime
+    index-based `encodeMtfAux`, a pure decoder model mirroring
+    `decodeLastColumnLoop`, and reuse of `decodeZeroRun_zeroRunDigits` and
+    `mtfDecode_mtfEncode_of_nodup`.
 - [ ] Prove used-byte map decode(encode alphabet) = alphabet under validity
   conditions.
 - [ ] Prove selector MTF decode(encode selectors) = selectors.
 - [ ] Prove canonical Huffman decode(encode symbols) = symbols.
-- [~] Prove bit writer / bit reader roundtrip.
-  - Writer side done: `Bzip2/Correctness/BZ2/Bits.lean` gives `BitWriter` a
+- [x] Prove bit writer / bit reader roundtrip.
+  - Writer side: `Bzip2/Correctness/BZ2/Bits.lean` gives `BitWriter` a
     `List Bool` denotation and proves `writeBit`/`writeBits`/`writeRepeatedBit`
     append exactly the expected bits (with a preserved well-formedness
-    invariant). Reader-side positional lemmas remain.
+    invariant).
+  - Reader side: `Bzip2/Correctness/BZ2/BitsReader.lean` characterises
+    `BitReader` positionally over `bitListOf` (the MSB-first bit list of its
+    backing bytes), proving `readBit_eq`, `readBits_eq`, and the headline
+    `readBits_of_prefix`: if the cursor bits begin with `natBitsMSB count value`
+    (`value < 2^count`), `readBits count` returns `value` and advances past
+    exactly those bits. This is the reusable bridge for every metadata parse.
 - [ ] Prove block CRC recomputation matches emitted metadata.
 
 ### 5.3 Refinement theorems
