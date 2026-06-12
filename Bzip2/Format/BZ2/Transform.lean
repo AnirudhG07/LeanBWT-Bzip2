@@ -38,77 +38,108 @@ structure EntropyInput where
   symbols : List Nat
 deriving DecidableEq
 
-private def appendRepeatedByte (out : ByteArray) (byte : UInt8) (count : Nat) : ByteArray :=
-  Id.run do
-    let mut out := out
-    for _ in [0:count] do
-      out := out.push byte
-    pure out
+/-! ### RLE1 token model
 
-private def appendRle1Chunk (out : ByteArray) (byte : UInt8) (chunkLen : Nat) : ByteArray :=
-  if chunkLen ≤ 3 then
-    appendRepeatedByte out byte chunkLen
-  else
-    let out := appendRepeatedByte out byte 4
-    out.push (UInt8.ofNat (chunkLen - 4))
+The initial bzip2 RLE1 transform is defined structurally on a list of
+`(byte, chunkLength)` tokens so its round trip and block-splitting properties
+are provable. The runtime encoder uses exactly these functions.
+-/
 
-private def rle1ChunkEncodedSize (chunkLen : Nat) : Nat :=
+/-- Encoded byte width of one RLE1 chunk: literal copies below 4, else 4 + a count byte. -/
+def rle1ChunkEncodedSize (chunkLen : Nat) : Nat :=
   if chunkLen ≤ 3 then chunkLen else 5
 
-private def spanRun (input : ByteArray) (start : Nat) : Nat :=
-  Id.run do
-    let byte := input[start]!
-    let mut count := 1
-    let mut index := start + 1
-    while index < input.size && input[index]! = byte do
-      count := count + 1
-      index := index + 1
-    pure count
+/-- Wire bytes for one RLE1 chunk of `chunkLen` copies of `byte`. -/
+def rle1ChunkBytes (byte : UInt8) (chunkLen : Nat) : List UInt8 :=
+  if chunkLen ≤ 3 then
+    List.replicate chunkLen byte
+  else
+    List.replicate 4 byte ++ [UInt8.ofNat (chunkLen - 4)]
+
+/-- Count of leading copies of `byte` at the front of `xs`. -/
+def leadingRun (byte : UInt8) : List UInt8 → Nat
+  | [] => 0
+  | x :: xs => if x = byte then leadingRun byte xs + 1 else 0
+
+theorem leadingRun_le (byte : UInt8) (xs : List UInt8) :
+    leadingRun byte xs ≤ xs.length := by
+  induction xs with
+  | nil => simp [leadingRun]
+  | cons x xs ih =>
+      simp only [leadingRun, List.length_cons]
+      split <;> omega
+
+/-- Split a run of `length` equal bytes into chunks of at most 255. -/
+def runChunks (byte : UInt8) : Nat → List (UInt8 × Nat)
+  | 0 => []
+  | length + 1 =>
+      let chunk := min (length + 1) 255
+      (byte, chunk) :: runChunks byte (length + 1 - chunk)
+termination_by length => length
+decreasing_by omega
+
+/-- Push the chunks of one run onto a reversed token accumulator. -/
+def pushRunChunksRev (byte : UInt8) : Nat → List (UInt8 × Nat) → List (UInt8 × Nat)
+  | 0, acc => acc
+  | length + 1, acc =>
+      let chunk := min (length + 1) 255
+      pushRunChunksRev byte (length + 1 - chunk) ((byte, chunk) :: acc)
+termination_by length => length
+decreasing_by omega
+
+/--
+Tail-recursive worker for `rle1Tokens`: `cur`/`count` is the run in progress,
+`acc` is the reversed token list. Structural on the remaining input, so it
+compiles to a loop and is stack-safe on full-size blocks.
+-/
+def rle1TokensRev : UInt8 → Nat → List UInt8 → List (UInt8 × Nat) → List (UInt8 × Nat)
+  | cur, count, [], acc => pushRunChunksRev cur count acc
+  | cur, count, x :: xs, acc =>
+      if x = cur then
+        rle1TokensRev cur (count + 1) xs acc
+      else
+        rle1TokensRev x 1 xs (pushRunChunksRev cur count acc)
+
+/-- Decompose input bytes into the maximal-run RLE1 token stream. -/
+def rle1Tokens : List UInt8 → List (UInt8 × Nat)
+  | [] => []
+  | byte :: xs => (rle1TokensRev byte 1 xs []).reverse
+
+/-- Append the wire bytes for one RLE1 token to `out`. -/
+def appendTokenBytes (out : ByteArray) (token : UInt8 × Nat) : ByteArray :=
+  (rle1ChunkBytes token.1 token.2).foldl ByteArray.push out
 
 /-- Encode one block with the initial bzip2 RLE1 transform. -/
 def encodeInitialRLE (input : ByteArray) : ByteArray :=
-  Id.run do
-    let mut out := ByteArray.empty
-    let mut index := 0
-    while index < input.size do
-      let byte := input[index]!
-      let runLen := spanRun input index
-      let mut remaining := runLen
-      while remaining > 0 do
-        let chunkLen := min remaining 255
-        out := appendRle1Chunk out byte chunkLen
-        remaining := remaining - chunkLen
-      index := index + runLen
-    pure out
+  (rle1Tokens input.toList).foldl appendTokenBytes ByteArray.empty
+
+/-- Original bytes contributed by one RLE1 token. -/
+private def tokenOriginal (token : UInt8 × Nat) : ByteArray :=
+  Bzip2.Format.byteArrayOfList (List.replicate token.2 token.1)
+
+/-- Wire bytes contributed by one RLE1 token. -/
+private def tokenRle1 (token : UInt8 × Nat) : ByteArray :=
+  Bzip2.Format.byteArrayOfList (rle1ChunkBytes token.1 token.2)
+
+/-- Greedily pack RLE1 tokens into blocks bounded by `blockSize` encoded bytes. -/
+def packTokens (blockSize : Nat) :
+    List (UInt8 × Nat) → ByteArray → ByteArray → List PreparedBlock
+  | [], curOriginal, curRle1 =>
+      if curRle1.size > 0 then [{ original := curOriginal, rle1 := curRle1 }] else []
+  | token :: rest, curOriginal, curRle1 =>
+      let chunkSize := rle1ChunkEncodedSize token.2
+      if curRle1.size > 0 && blockSize < curRle1.size + chunkSize then
+        { original := curOriginal, rle1 := curRle1 } ::
+          packTokens blockSize rest (tokenOriginal token) (tokenRle1 token)
+      else
+        packTokens blockSize rest
+          (curOriginal ++ tokenOriginal token) (curRle1 ++ tokenRle1 token)
 
 /-- Split input bytes into exact `.bz2` blocks without breaking RLE1 tokens. -/
 def prepareBlocks (blockSize : Nat) (input : ByteArray) : Except String (List PreparedBlock) := do
   if blockSize = 0 then
     throw "Exact `.bz2` block size must be positive."
-  let blocks := Id.run do
-    let mut blocks : List PreparedBlock := []
-    let mut currentOriginal := ByteArray.empty
-    let mut currentRle1 := ByteArray.empty
-    let mut index := 0
-    while index < input.size do
-      let byte := input[index]!
-      let runLen := spanRun input index
-      let mut remaining := runLen
-      while remaining > 0 do
-        let chunkLen := min remaining 255
-        let rleChunkSize := rle1ChunkEncodedSize chunkLen
-        if currentRle1.size > 0 && blockSize < currentRle1.size + rleChunkSize then
-          blocks := { original := currentOriginal, rle1 := currentRle1 } :: blocks
-          currentOriginal := ByteArray.empty
-          currentRle1 := ByteArray.empty
-        currentOriginal := appendRepeatedByte currentOriginal byte chunkLen
-        currentRle1 := appendRle1Chunk currentRle1 byte chunkLen
-        remaining := remaining - chunkLen
-      index := index + runLen
-    if currentRle1.size > 0 then
-      blocks := { original := currentOriginal, rle1 := currentRle1 } :: blocks
-    pure blocks.reverse
-  pure blocks
+  pure (packTokens blockSize (rle1Tokens input.toList) ByteArray.empty ByteArray.empty)
 
 private def rotationLEAux (bytes : ByteArray) (n i j offset : Nat) : Nat → Bool
   | 0 => true
@@ -156,20 +187,22 @@ def transformBWT (input : ByteArray) : BWTBlock :=
 def usedBytes (input : ByteArray) : List UInt8 :=
   input.toList.eraseDups.mergeSort (fun a b => decide (a ≤ b))
 
-private def zeroRunCodeRev : Nat → List Nat
+/--
+Bijective base-2 digits of a zero-run length, least-significant first.
+Symbol `0` is RUNA (weight `1`), symbol `1` is RUNB (weight `2`); the digit at
+position `i` carries weight `2 ^ i`. This is the structural, provable form of
+the RUNA/RUNB encoding of a run of zeros.
+-/
+def zeroRunDigits : Nat → List Nat
   | 0 => []
-  | count =>
-      let rec loop : Nat → List Nat → List Nat
-        | value, acc =>
-            let symbol := if value % 2 = 0 then 0 else 1
-            let acc := symbol :: acc
-            if value < 2 then
-              acc
-            else
-              loop ((value - 2) / 2) acc
-      loop (count - 1) []
+  | count + 1 => (count % 2) :: zeroRunDigits (count / 2)
+termination_by n => n
+decreasing_by omega
 
-private def encodeMtfAux :
+/-- The zero-run symbols in stream order (most-significant digit first). -/
+def zeroRunCodeRev (count : Nat) : List Nat := (zeroRunDigits count).reverse
+
+def encodeMtfAux :
     List UInt8 → ByteArray → Nat → Nat → List Nat → List Nat
   | alphabet, bytes, index, zeroCount, accRev =>
       if h : index < bytes.size then

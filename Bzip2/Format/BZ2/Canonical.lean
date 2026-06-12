@@ -58,17 +58,20 @@ private def assignEntriesAux :
       assignEntriesAux rest bitLength (nextCode + 1)
         ({ symbol := sym, bitLength := bitLength, code := nextCode } :: acc)
 
+private def buildEntriesFrom (codeLengths : List Nat) (maxLength : Nat) :
+    Nat → Nat → List CanonicalEntry → List CanonicalEntry
+  | bitLength, nextCode, acc =>
+      if maxLength < bitLength then
+        acc
+      else
+        let nextCode := if bitLength = 1 then nextCode else nextCode * 2
+        let (acc', nextCode') :=
+          assignEntriesAux (symbolsWithLength codeLengths bitLength) bitLength nextCode acc
+        buildEntriesFrom codeLengths maxLength (bitLength + 1) nextCode' acc'
+termination_by bitLength => maxLength + 1 - bitLength
+
 private def buildEntries (codeLengths : List Nat) (maxLength : Nat) : List CanonicalEntry :=
-  Id.run do
-    let mut entries : List CanonicalEntry := []
-    let mut nextCode := 0
-    for bitLength in [1:maxLength + 1] do
-      if bitLength ≠ 1 then
-        nextCode := nextCode * 2
-      let (entries', nextCode') := assignEntriesAux (symbolsWithLength codeLengths bitLength) bitLength nextCode entries
-      entries := entries'
-      nextCode := nextCode'
-    pure entries.reverse
+  (buildEntriesFrom codeLengths maxLength 1 0 []).reverse
 
 /-- Rebuild one exact `.bz2` canonical Huffman table from decoded code lengths. -/
 def CanonicalTable.build (codeLengths : List Nat) : Except String CanonicalTable := do

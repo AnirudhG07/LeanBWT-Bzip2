@@ -12,3 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: leanprover/lean-action@v1
+      - name: Ensure system bzip2 is available
+        run: sudo apt-get update && sudo apt-get install -y bzip2
+      - name: Run test suites and CLI smoke tests
+        run: ./scripts/run_tests.sh

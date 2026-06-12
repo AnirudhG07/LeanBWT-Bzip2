@@ -37,7 +37,7 @@ def BitWriter.writeBit (writer : BitWriter) (bit : Bool) : BitWriter :=
   else
     { writer with currentByte := currentByte', usedBits := usedBits' }
 
-private def writeBitsAux : Nat → Nat → BitWriter → BitWriter
+def writeBitsAux : Nat → Nat → BitWriter → BitWriter
   | 0, _, writer => writer
   | remaining + 1, value, writer =>
       let bit := ((value / (2 ^ remaining)) % 2 = 1)

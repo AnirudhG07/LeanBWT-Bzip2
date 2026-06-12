@@ -4,6 +4,7 @@ import Bzip2.Correctness.Matrix
 import Bzip2.Correctness.LF
 import Bzip2.Correctness.Inverse
 import Bzip2.Correctness.BwtCorrectness
+import Bzip2.Correctness.BZ2
 
 /-!
 # Bzip2.Correctness

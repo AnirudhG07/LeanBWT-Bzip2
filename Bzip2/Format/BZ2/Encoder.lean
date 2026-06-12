@@ -1,6 +1,7 @@
 import Bzip2.Format.BZ2.BitWriter
 import Bzip2.Format.BZ2.CRC
 import Bzip2.Format.BZ2.Canonical
+import Bzip2.Format.BZ2.InverseBWT
 import Bzip2.Format.BZ2.Model
 import Bzip2.Format.BZ2.Transform
 import Huffman.Codec
@@ -81,12 +82,9 @@ private def encodeSelectorsAux :
 private def encodeSelectors (groupCount : Nat) (selectors : List Nat) : Except String (List Nat) :=
   encodeSelectorsAux selectors (List.range groupCount) []
 
+/-- Least `bits` with `count ≤ 2 ^ bits`; the ceiling base-2 logarithm. -/
 private def minBitsForCount (count : Nat) : Nat :=
-  Id.run do
-    let mut bits := 0
-    while 2 ^ bits < count do
-      bits := bits + 1
-    pure bits
+  Nat.clog 2 count
 
 private def fallbackCodeLengths (alphaSize : Nat) : List Nat :=
   let width := max 1 (minBitsForCount alphaSize)
@@ -137,48 +135,207 @@ private def writeUsedBytes (writer : BitWriter) (usedBytes : List UInt8) : BitWr
 private def writeUnaryZeroTerminated (writer : BitWriter) (count : Nat) : BitWriter :=
   (writer.writeRepeatedBit count true).writeBit false
 
+/-- Emit the unary delta steps that move the running code length to `target`. -/
+private def writeLengthDelta (writer : BitWriter) (current target : Nat) : BitWriter :=
+  if current = target then
+    writer
+  else if target < current then
+    writeLengthDelta ((writer.writeBit true).writeBit true) (current - 1) target
+  else
+    writeLengthDelta ((writer.writeBit true).writeBit false) (current + 1) target
+termination_by (current - target) + (target - current)
+decreasing_by all_goals omega
+
+private def writeCodeLengthTableAux (current : Nat) :
+    List Nat → BitWriter → BitWriter
+  | [], writer => writer
+  | target :: rest, writer =>
+      let writer := writeLengthDelta writer current target
+      writeCodeLengthTableAux target rest (writer.writeBit false)
+
 private def writeCodeLengthTable (writer : BitWriter) (lengths : List Nat) : BitWriter :=
+  let startLength := lengths.headD 0
+  writeCodeLengthTableAux startLength lengths (writer.writeBits 5 startLength)
+
+/-- Number of 50-symbol groups (and thus selectors) for one block. -/
+def selectorCount (symbols : List Nat) : Nat :=
+  max 1 ((symbols.length + 49) / 50)
+
+/-- Huffman group count by MTF symbol count, matching bzip2's `sendMTFValues`. -/
+def nGroupsForSymbolCount (count : Nat) : Nat :=
+  if count < 200 then 2
+  else if count < 600 then 3
+  else if count < 1200 then 4
+  else if count < 2400 then 5
+  else 6
+
+/-- Per-block entropy-coding plan: code-length tables plus one selector per group. -/
+structure EntropyPlan where
+  tables : List (List Nat)
+  selectors : List Nat
+deriving Repr
+
+/--
+Validity contract between the planner and the wire emitter. `encodeBlock`
+re-checks this dynamically, so correctness of emitted streams never depends
+on how the planner chose the plan.
+-/
+def EntropyPlan.valid (plan : EntropyPlan) (alphaSize symbolCount : Nat) : Bool :=
+  2 ≤ plan.tables.length
+    && plan.tables.length ≤ 6
+    && plan.tables.all (fun lengths => lengths.length = alphaSize)
+    && plan.selectors.length = max 1 ((symbolCount + 49) / 50)
+    && plan.selectors.length < 32768
+    && plan.selectors.all (· < plan.tables.length)
+
+private def rawFrequencies (alphaSize : Nat) (symbols : List Nat) : Array Nat :=
+  symbols.foldl
+    (fun acc symbol =>
+      if symbol < alphaSize then
+        acc.set! symbol (acc[symbol]! + 1)
+      else
+        acc)
+    (Array.replicate alphaSize 0)
+
+/--
+Initial cost tables seeding the refinement iterations: partition the alphabet
+into `nGroups` contiguous ranges of roughly equal total frequency, scoring
+in-range symbols as cheap (0) and out-of-range symbols as expensive (15).
+These seeds are never emitted; refinement replaces them with real lengths.
+-/
+private def initialCostTables (alphaSize nGroups : Nat) (freq : Array Nat) :
+    Array (Array Nat) :=
   Id.run do
-    let startLength := lengths.headD 0
-    let mut writer := writer.writeBits 5 startLength
-    let mut current := startLength
-    for target in lengths do
-      while current ≠ target do
-        writer := writer.writeBit true
-        if target < current then
-          writer := writer.writeBit true
-          current := current - 1
-        else
-          writer := writer.writeBit false
-          current := current + 1
-      writer := writer.writeBit false
-    pure writer
+    let total := freq.foldl (· + ·) 0
+    let mut tables : Array (Array Nat) := #[]
+    let mut gs := 0
+    let mut remF := total
+    let mut nPart := nGroups
+    while nPart > 0 do
+      let target := remF / nPart
+      let mut ge := gs
+      let mut aFreq := 0
+      while (aFreq < target ∨ ge = gs) && ge < alphaSize do
+        aFreq := aFreq + freq[ge]!
+        ge := ge + 1
+      let hi := if nPart = 1 then alphaSize else ge
+      let lengths := Array.ofFn (n := alphaSize)
+        (fun s => if gs ≤ s.val && s.val < hi then 0 else 15)
+      tables := tables.push lengths
+      remF := remF - aFreq
+      gs := hi
+      nPart := nPart - 1
+    pure tables
+
+private def chunksOf50 (symbols : Array Nat) : Array (Array Nat) :=
+  Id.run do
+    let mut chunks : Array (Array Nat) := #[]
+    let mut index := 0
+    while index < symbols.size do
+      chunks := chunks.push (symbols.extract index (index + 50))
+      index := index + 50
+    pure chunks
+
+private def groupCost (lengths : Array Nat) (chunk : Array Nat) : Nat :=
+  chunk.foldl (fun acc symbol => acc + lengths.getD symbol 15) 0
+
+private def cheapestTable (tables : Array (Array Nat)) (chunk : Array Nat) : Nat :=
+  Id.run do
+    let mut best := 0
+    let mut bestCost := groupCost (tables.getD 0 #[]) chunk
+    for t in [1:tables.size] do
+      let cost := groupCost tables[t]! chunk
+      if cost < bestCost then
+        best := t
+        bestCost := cost
+    pure best
+
+/--
+One refinement pass: assign every 50-symbol group to its cheapest table, then
+rebuild each table's code lengths from the symbols it was assigned.
+-/
+private def refineOnce (alphaSize : Nat) (chunks : Array (Array Nat))
+    (tables : Array (Array Nat)) :
+    Except String (Array Nat × Array (Array Nat)) := do
+  let selectors := chunks.map (cheapestTable tables)
+  let mut assigned : Array (List Nat) := Array.replicate tables.size []
+  for h : i in [0:chunks.size] do
+    let t := selectors[i]!
+    assigned := assigned.set! t (chunks[i].toList ++ assigned[t]!)
+  let mut rebuilt : Array (Array Nat) := #[]
+  for syms in assigned do
+    let lengths ← tableCodeLengths alphaSize syms
+    rebuilt := rebuilt.push lengths.toArray
+  pure (selectors, rebuilt)
+
+/--
+Choose the per-block Huffman tables and selectors, mirroring the structure of
+bzip2's `sendMTFValues`: 2-6 tables by symbol count, frequency-partitioned
+seeds, then four greedy refinement iterations.
+-/
+def planEntropyCoding (alphaSize : Nat) (symbols : List Nat) :
+    Except String EntropyPlan := do
+  let nGroups := nGroupsForSymbolCount symbols.length
+  let chunks := chunksOf50 symbols.toArray
+  let freq := rawFrequencies alphaSize symbols
+  let mut tables := initialCostTables alphaSize nGroups freq
+  let mut selectors : Array Nat := Array.replicate (max 1 chunks.size) 0
+  for _ in [0:4] do
+    let (selectors', tables') ← refineOnce alphaSize chunks tables
+    selectors := if selectors'.isEmpty then selectors else selectors'
+    tables := tables'
+  pure { tables := tables.toList.map (·.toList), selectors := selectors.toList }
+
+private def codeLookup (alphaSize : Nat) (table : CanonicalTable) : Array (Nat × Nat) :=
+  table.entries.foldl
+    (fun acc entry =>
+      if entry.symbol < alphaSize then
+        acc.set! entry.symbol (entry.bitLength, entry.code)
+      else
+        acc)
+    (Array.replicate alphaSize (0, 0))
+
+private def writeSymbolsAux
+    (lookups : Array (Array (Nat × Nat))) (selectors : Array Nat) :
+    List Nat → Nat → BitWriter → Except String BitWriter
+  | [], _, writer => pure writer
+  | symbol :: rest, count, writer => do
+      let some selector := selectors[count / 50]?
+        | throw "Exact `.bz2` encoder ran out of Huffman selectors."
+      let some lookup := lookups[selector]?
+        | throw "Exact `.bz2` encoder selector references a missing Huffman table."
+      let some (bitLength, code) := lookup[symbol]?
+        | throw "Exact `.bz2` encoder generated a symbol missing from the canonical table."
+      if bitLength = 0 then
+        throw "Exact `.bz2` encoder selected a table without a code for a symbol."
+      writeSymbolsAux lookups selectors rest (count + 1) (writer.writeBits bitLength code)
 
 private def writeSymbolStream
-    (writer : BitWriter) (table : CanonicalTable) (symbols : List Nat) :
-    Except String BitWriter := do
-  symbols.foldlM
-    (fun writer symbol => do
-      let some entry := table.entries.find? (fun entry => entry.symbol = symbol)
-        | throw "Exact `.bz2` encoder generated a symbol missing from the canonical table."
-      pure (writer.writeBits entry.bitLength entry.code))
-    writer
-
-private def selectorCount (symbols : List Nat) : Nat :=
-  max 1 ((symbols.length + 49) / 50)
+    (writer : BitWriter) (lookups : Array (Array (Nat × Nat))) (selectors : List Nat)
+    (symbols : List Nat) : Except String BitWriter :=
+  writeSymbolsAux lookups selectors.toArray symbols 0 writer
 
 private def encodeBlock (writer : BitWriter) (block : EntropyInput) : Except String (BitWriter × UInt32) := do
   let blockCRC := crc32 block.original
+  -- BWT self-check: confirm the decoder's inverse BWT reproduces this block's
+  -- pre-BWT bytes. This makes stream correctness independent of which forward
+  -- BWT was used: a faulty transform can only fail compression here, never
+  -- emit a stream that decodes to the wrong bytes.
+  match inverseBWT block.lastColumn block.origPtr with
+  | .error err =>
+      throw s!"Exact `.bz2` encoder BWT self-check failed: {err}"
+  | .ok recovered =>
+      if recovered != block.rle1 then
+        throw "Exact `.bz2` encoder BWT self-check failed: inverse did not reproduce the block."
   let alphaSize := block.usedBytes.length + 2
-  -- Compatibility-first exact encoding: emit two valid tables and select the
-  -- first one for every 50-symbol group. This matches the wire format cleanly
-  -- even though it is not yet tuned for compression ratio.
-  let groupCount := 2
-  let selectors := List.replicate (selectorCount block.symbols) 0
+  let plan ← planEntropyCoding alphaSize block.symbols
+  if !plan.valid alphaSize block.symbols.length then
+    throw "Exact `.bz2` encoder produced an invalid entropy-coding plan."
+  let groupCount := plan.tables.length
+  let selectors := plan.selectors
   let encodedSelectors ← encodeSelectors groupCount selectors
-  let tableLengths ← tableCodeLengths alphaSize block.symbols
-  let tables := [tableLengths, tableLengths]
-  let canonical ← CanonicalTable.build tableLengths
+  let canonicals ← plan.tables.mapM CanonicalTable.build
+  let lookups := (canonicals.map (codeLookup alphaSize)).toArray
   let writer := writer.writeBits 48 blockMagic
   let writer := writer.writeBits 32 blockCRC.toNat
   let writer := writer.writeBit false
@@ -187,8 +344,8 @@ private def encodeBlock (writer : BitWriter) (block : EntropyInput) : Except Str
   let writer := writer.writeBits 3 groupCount
   let writer := writer.writeBits 15 selectors.length
   let writer := encodedSelectors.foldl writeUnaryZeroTerminated writer
-  let writer := tables.foldl writeCodeLengthTable writer
-  let writer ← writeSymbolStream writer canonical block.symbols
+  let writer := plan.tables.foldl writeCodeLengthTable writer
+  let writer ← writeSymbolStream writer lookups selectors block.symbols
   pure (writer, blockCRC)
 
 private def encodeBlocks (writer : BitWriter) (blocks : List EntropyInput) :

@@ -87,29 +87,39 @@ private def decodeNextSymbol
     , reader'
     )
 
-private partial def decodeLastColumnLoop
-    (maxBlockSize endOfBlock : Nat) (tables : List CanonicalTable) (selectors : List Nat)
+/--
+Decode the Huffman/RUNA/RUNB/MTF symbol stream into the BWT last column.
+
+`fuel` bounds the loop; each step consumes at least one input bit, so the
+caller supplies `reader.bitsRemaining + 1`, which always suffices. The
+recursive calls are in tail position, so this compiles to a stack-safe loop.
+-/
+private def decodeLastColumnLoop
+    (fuel maxBlockSize endOfBlock : Nat) (tables : List CanonicalTable) (selectors : List Nat)
     (alphabet : List UInt8) (groupState : GroupState) (reader : BitReader)
     (repeatCount repeatPower outCount : Nat) (outRev : List UInt8) :
     Except String (ByteArray × BitReader) := do
-  let (symbol, groupState', reader') ← decodeNextSymbol tables selectors groupState reader
-  if symbol < 2 then
-    let repeatPower' := if repeatCount = 0 then 1 else repeatPower
-    let repeatCount' := repeatCount + repeatPower' * if symbol = 0 then 1 else 2
-    if 2 * 1024 * 1024 < repeatCount' then
-      throw "Exact `.bz2` RUNA/RUNB repeat count is unrealistically large."
-    decodeLastColumnLoop maxBlockSize endOfBlock tables selectors alphabet groupState'
-      reader' repeatCount' (repeatPower' * 2) outCount outRev
-  else
-    let (outCount', outRev') ← flushRepeat alphabet repeatCount outCount maxBlockSize outRev
-    if symbol = endOfBlock then
-      pure (Bzip2.Format.byteArrayOfList outRev'.reverse, reader')
+  match fuel with
+  | 0 => throw "Exact `.bz2` block decode exceeded its bit budget."
+  | fuel + 1 =>
+    let (symbol, groupState', reader') ← decodeNextSymbol tables selectors groupState reader
+    if symbol < 2 then
+      let repeatPower' := if repeatCount = 0 then 1 else repeatPower
+      let repeatCount' := repeatCount + repeatPower' * if symbol = 0 then 1 else 2
+      if 2 * 1024 * 1024 < repeatCount' then
+        throw "Exact `.bz2` RUNA/RUNB repeat count is unrealistically large."
+      decodeLastColumnLoop fuel maxBlockSize endOfBlock tables selectors alphabet groupState'
+        reader' repeatCount' (repeatPower' * 2) outCount outRev
     else
-      let (byte, alphabet') ← decodeMTFIndex alphabet (symbol - 1)
-      if maxBlockSize < outCount' + 1 then
-        throw "Exact `.bz2` block exceeds the declared block size."
-      decodeLastColumnLoop maxBlockSize endOfBlock tables selectors alphabet' groupState'
-        reader' 0 0 (outCount' + 1) (byte :: outRev')
+      let (outCount', outRev') ← flushRepeat alphabet repeatCount outCount maxBlockSize outRev
+      if symbol = endOfBlock then
+        pure (Bzip2.Format.byteArrayOfList outRev'.reverse, reader')
+      else
+        let (byte, alphabet') ← decodeMTFIndex alphabet (symbol - 1)
+        if maxBlockSize < outCount' + 1 then
+          throw "Exact `.bz2` block exceeds the declared block size."
+        decodeLastColumnLoop fuel maxBlockSize endOfBlock tables selectors alphabet' groupState'
+          reader' 0 0 (outCount' + 1) (byte :: outRev')
 
 private def decodeLastColumn
     (maxBlockSize : Nat) (header : BlockHeader) (huffman : HuffmanMetadata) (reader : BitReader) :
@@ -119,31 +129,31 @@ private def decodeLastColumn
   let tables ← huffman.codeLengths.mapM CanonicalTable.build
   let groupState ← initGroupState tables huffman.selectors
   let endOfBlock := header.usedBytes.length + 1
-  decodeLastColumnLoop maxBlockSize endOfBlock tables huffman.selectors header.usedBytes
-    groupState reader 0 0 0 []
+  decodeLastColumnLoop (reader.bitsRemaining + 1) maxBlockSize endOfBlock tables huffman.selectors
+    header.usedBytes groupState reader 0 0 0 []
 
-private def decodeInitialRLE (input : ByteArray) : ByteArray :=
-  Id.run do
-    let mut out := ByteArray.empty
-    let mut i := 0
-    while i < input.size do
-      let byte := input[i]!
-      if i + 4 < input.size
-          && input[i + 1]! = byte
-          && input[i + 2]! = byte
-          && input[i + 3]! = byte then
-        out := out.push byte
-        out := out.push byte
-        out := out.push byte
-        out := out.push byte
-        let repeats := input[i + 4]!.toNat
-        for _ in [0:repeats] do
-          out := out.push byte
-        i := i + 5
+/-- Push `count` copies of `byte` onto `out`. -/
+def pushCopies (out : ByteArray) (byte : UInt8) : Nat → ByteArray
+  | 0 => out
+  | count + 1 => pushCopies (out.push byte) byte count
+
+/--
+Reverse the initial RLE1 transform. Structural on the remaining byte list:
+four equal bytes followed by a count byte expand to `4 + count` copies.
+-/
+def decodeInitialRLEAux : List UInt8 → ByteArray → ByteArray
+  | b₁ :: b₂ :: b₃ :: b₄ :: cnt :: rest, out =>
+      if b₁ = b₂ && b₂ = b₃ && b₃ = b₄ then
+        let out := (((out.push b₁).push b₂).push b₃).push b₄
+        decodeInitialRLEAux rest (pushCopies out b₁ cnt.toNat)
       else
-        out := out.push byte
-        i := i + 1
-    pure out
+        decodeInitialRLEAux (b₂ :: b₃ :: b₄ :: cnt :: rest) (out.push b₁)
+  | b :: rest, out => decodeInitialRLEAux rest (out.push b)
+  | [], out => out
+termination_by l => l.length
+
+def decodeInitialRLE (input : ByteArray) : ByteArray :=
+  decodeInitialRLEAux input.toList ByteArray.empty
 
 private def decodeBlockAfterMetadata
     (maxBlockSize : Nat) (metadata : BlockMetadata) (reader : BitReader) :
@@ -158,39 +168,55 @@ private def decodeBlockAfterMetadata
     throw "Exact `.bz2` block CRC mismatch."
   pure (decoded, blockCRC, reader1)
 
-private partial def decodeSections
-    (header : StreamHeader) (reader : BitReader) (streamCRC : UInt32) (out : ByteArray) :
+/--
+Decode every section of one stream until end-of-stream. `fuel` bounds the
+section count; each section consumes at least one bit, so `reader.bitsRemaining
++ 1` always suffices. Tail-recursive, hence stack-safe.
+-/
+private def decodeSections
+    (fuel : Nat) (header : StreamHeader) (reader : BitReader) (streamCRC : UInt32) (out : ByteArray) :
     Except String (ByteArray × BitReader) := do
-  let (marker, reader1) ← parseSectionMarker reader
-  match marker with
-  | .block =>
-      let (metadata, reader2) ← parseBlockSectionAfterMarker reader1
-      let (decoded, blockCRC, reader3) ← decodeBlockAfterMetadata header.blockSizeBytes metadata reader2
-      let streamCRC' := combineStreamCRC streamCRC blockCRC
-      decodeSections header reader3 streamCRC' (appendByteArray out decoded)
-  | .eos =>
-      let (trailer, reader2) ← parseEndOfStreamAfterMarker reader1
-      if trailer.streamCRC ≠ streamCRC then
-        throw "Exact `.bz2` stream CRC mismatch."
-      pure (out, reader2.alignToByte)
+  match fuel with
+  | 0 => throw "Exact `.bz2` stream contains more sections than its length allows."
+  | fuel + 1 =>
+    let (marker, reader1) ← parseSectionMarker reader
+    match marker with
+    | .block =>
+        let (metadata, reader2) ← parseBlockSectionAfterMarker reader1
+        let (decoded, blockCRC, reader3) ← decodeBlockAfterMetadata header.blockSizeBytes metadata reader2
+        let streamCRC' := combineStreamCRC streamCRC blockCRC
+        decodeSections fuel header reader3 streamCRC' (appendByteArray out decoded)
+    | .eos =>
+        let (trailer, reader2) ← parseEndOfStreamAfterMarker reader1
+        if trailer.streamCRC ≠ streamCRC then
+          throw "Exact `.bz2` stream CRC mismatch."
+        pure (out, reader2.alignToByte)
 
-private partial def decodeStreams (reader : BitReader) (out : ByteArray) :
+/--
+Decode one or more concatenated streams. `fuel` bounds the stream count; each
+stream consumes at least one bit. Tail-recursive, hence stack-safe.
+-/
+private def decodeStreams (fuel : Nat) (reader : BitReader) (out : ByteArray) :
     Except String ByteArray := do
-  let reader := reader.alignToByte
-  if reader.bitsRemaining = 0 then
-    pure out
-  else
-    let (header, reader1) ← parseStreamHeader reader
-    let (streamBytes, reader2) ← decodeSections header reader1 0 ByteArray.empty
-    decodeStreams reader2 (appendByteArray out streamBytes)
+  match fuel with
+  | 0 => throw "Exact `.bz2` input contains more streams than its length allows."
+  | fuel + 1 =>
+    let reader := reader.alignToByte
+    if reader.bitsRemaining = 0 then
+      pure out
+    else
+      let (header, reader1) ← parseStreamHeader reader
+      let (streamBytes, reader2) ← decodeSections (reader1.bitsRemaining + 1) header reader1 0 ByteArray.empty
+      decodeStreams fuel reader2 (appendByteArray out streamBytes)
 
 /-- Decompress one or more concatenated exact `.bz2` streams. -/
 def decompress? (archive : ByteArray) : Except String ByteArray :=
-  decodeStreams (BitReader.ofByteArray archive) ByteArray.empty
+  let reader := BitReader.ofByteArray archive
+  decodeStreams (reader.bitsRemaining + 1) reader ByteArray.empty
 
-private partial def decodeSectionsToHandle
+private partial def decodeSectionsToSink
     (header : StreamHeader) (reader : BitReader) (streamCRC : UInt32)
-    (handle : IO.FS.Handle) :
+    (write : ByteArray → IO Unit) :
     IO (Except String BitReader) := do
   match parseSectionMarker reader with
   | .error err => pure (.error err)
@@ -201,9 +227,9 @@ private partial def decodeSectionsToHandle
           match decodeBlockAfterMetadata header.blockSizeBytes metadata reader2 with
           | .error err => pure (.error err)
           | .ok (decoded, blockCRC, reader3) =>
-              handle.write decoded
+              write decoded
               let streamCRC' := combineStreamCRC streamCRC blockCRC
-              decodeSectionsToHandle header reader3 streamCRC' handle
+              decodeSectionsToSink header reader3 streamCRC' write
   | .ok (.eos, reader1) =>
       match parseEndOfStreamAfterMarker reader1 with
       | .error err => pure (.error err)
@@ -213,8 +239,8 @@ private partial def decodeSectionsToHandle
           else
             pure (.ok reader2.alignToByte)
 
-private partial def decodeStreamsToHandle
-    (reader : BitReader) (handle : IO.FS.Handle) :
+private partial def decodeStreamsToSink
+    (reader : BitReader) (write : ByteArray → IO Unit) :
     IO (Except String Unit) := do
   let reader := reader.alignToByte
   if reader.bitsRemaining = 0 then
@@ -223,9 +249,17 @@ private partial def decodeStreamsToHandle
     match parseStreamHeader reader with
     | .error err => pure (.error err)
     | .ok (header, reader1) =>
-        match ← decodeSectionsToHandle header reader1 0 handle with
+        match ← decodeSectionsToSink header reader1 0 write with
         | .error err => pure (.error err)
-        | .ok reader2 => decodeStreamsToHandle reader2 handle
+        | .ok reader2 => decodeStreamsToSink reader2 write
+
+/--
+Decompress one or more concatenated exact `.bz2` streams and feed the decoded
+bytes block by block to an arbitrary sink.
+-/
+def decompressToSink? (archive : ByteArray) (write : ByteArray → IO Unit) :
+    IO (Except String Unit) :=
+  decodeStreamsToSink (BitReader.ofByteArray archive) write
 
 /--
 Decompress one or more concatenated exact `.bz2` streams and write the decoded
@@ -233,6 +267,6 @@ bytes directly to a file handle block by block.
 -/
 def decompressToHandle? (archive : ByteArray) (handle : IO.FS.Handle) :
     IO (Except String Unit) :=
-  decodeStreamsToHandle (BitReader.ofByteArray archive) handle
+  decompressToSink? archive handle.write
 
 end Bzip2.Format.BZ2

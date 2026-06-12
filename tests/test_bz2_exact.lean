@@ -170,6 +170,44 @@ private def exactFastBWTMatchesReferenceCase : TestCase :=
       loop samples
   }
 
+private def exactFastBWTMatchesReferenceLargeCase : TestCase :=
+  { name := "fast exact BWT matches reference BWT on a varied corpus"
+  , run := do
+      -- A small LCG keeps this deterministic while exercising periodic, runny,
+      -- and high-entropy inputs of varying length against the reference BWT.
+      let lcg (seed : Nat) : Nat := (1103515245 * seed + 12345) % 2147483648
+      let mkRandom (seed len : Nat) : ByteArray := Id.run do
+        let mut s := seed
+        let mut acc : List UInt8 := []
+        for _ in [0:len] do
+          s := lcg s
+          acc := UInt8.ofNat (s % 256) :: acc
+        pure (byteArrayOfList acc.reverse)
+      let mkPeriodic (period len : Nat) : ByteArray :=
+        byteArrayOfList ((List.range len).map (fun i => UInt8.ofNat (i % period)))
+      let mkRunny (len : Nat) : ByteArray :=
+        byteArrayOfList ((List.range len).map (fun i => UInt8.ofNat ((i / 7) % 4)))
+      let samples : List (String × ByteArray) :=
+        [ ("random-37", mkRandom 1 37)
+        , ("random-200", mkRandom 99 200)
+        , ("random-512", mkRandom 7 512)
+        , ("periodic-3-90", mkPeriodic 3 90)
+        , ("periodic-5-300", mkPeriodic 5 300)
+        , ("runny-256", mkRunny 256)
+        , ("all-same-300", byteArrayOfList (List.replicate 300 0x5A))
+        , ("two-value-400",
+            byteArrayOfList ((List.range 400).map (fun i => UInt8.ofNat (if i % 2 = 0 then 0 else 1))))
+        ]
+      let rec loop : List (String × ByteArray) → IO TestOutcome
+        | [] => pure .pass
+        | (label, input) :: rest =>
+            if transformBWT input = transformBWTReference input then
+              loop rest
+            else
+              pure <| .fail s!"BWT mismatch on sample {label}"
+      loop samples
+  }
+
 private def exactEncoderSystemBzip2Case : TestCase :=
   { name := "system bzip2 validates and decompresses our exact output"
   , run := do
@@ -231,6 +269,7 @@ private def cases : List TestCase :=
   , exactConcatenatedCase
   , exactCorruptBlockCrcCase
   , exactFastBWTMatchesReferenceCase
+  , exactFastBWTMatchesReferenceLargeCase
   , exactEncoderSelfRoundtripCase
   , exactEncoderSystemBzip2Case
   , exactDecoderReadsSystemBzip2Case

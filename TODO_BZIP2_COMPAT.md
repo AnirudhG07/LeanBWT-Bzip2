@@ -224,6 +224,11 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 - [x] Introduce a separate fast native BWT layer without deleting the existing
   proved BWT construction.
+- [x] Decouple stream correctness from forward-BWT correctness via a runtime
+  self-check: `encodeBlock` now verifies `inverseBWT lastColumn origPtr = rle1`
+  and fails compression otherwise, so a faulty forward BWT can never produce a
+  stream that decodes to the wrong bytes. This lets the BWT refinement proofs
+  (5.3) be deferred without weakening the headline round-trip.
 - [ ] Define an exact block semantic model between the abstract pipeline and the
   bitstream.
 - [ ] Keep the current proved BWT/MTF/RLE core as the mathematical reference.
@@ -241,12 +246,18 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 ### 5.2 New correctness lemmas
 
 - [ ] Prove initial RLE1 decode(encode xs) = xs.
-- [ ] Prove RUNA/RUNB decode(encode xs) = xs.
+- [x] Prove RUNA/RUNB decode(encode xs) = xs.
+  - `decodeZeroRun_zeroRunDigits` in `Bzip2/Correctness/BZ2/ZeroRun.lean`
+    proves the bijective base-2 RUNA/RUNB digit stream round-trips.
 - [ ] Prove used-byte map decode(encode alphabet) = alphabet under validity
   conditions.
 - [ ] Prove selector MTF decode(encode selectors) = selectors.
 - [ ] Prove canonical Huffman decode(encode symbols) = symbols.
-- [ ] Prove bit writer / bit reader roundtrip.
+- [~] Prove bit writer / bit reader roundtrip.
+  - Writer side done: `Bzip2/Correctness/BZ2/Bits.lean` gives `BitWriter` a
+    `List Bool` denotation and proves `writeBit`/`writeBits`/`writeRepeatedBit`
+    append exactly the expected bits (with a preserved well-formedness
+    invariant). Reader-side positional lemmas remain.
 - [ ] Prove block CRC recomputation matches emitted metadata.
 
 ### 5.3 Refinement theorems
@@ -275,14 +286,26 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 
 ## Phase 6: Engineering / CLI
 
-- [ ] Add command-line entrypoints:
-  - `compress`
-  - `decompress`
-  - `test`
-- [ ] Add fixture-based integration tests that invoke system `bzip2`.
-- [ ] Add benchmarks on representative files.
+- [x] Add command-line entrypoints (`Main.lean` + `Bzip2/CLI.lean`, exe `bzip2`):
+  - `compress` (default; in-place `file` → `file.bz2`)
+  - `decompress` (`-d`, suffix-based output naming)
+  - `test` (`-t`)
+  - plus `-k -c -f -q -v -1..-9 -s -L -V --help --`, stdin/stdout filtering,
+    clustered short flags, `bunzip2`/`bzcat` argv0 aliasing, and bzip2 exit
+    codes (0/1/2/3).
+- [x] Add fixture-based integration tests that invoke system `bzip2`.
+  - `scripts/run_tests.sh` runs the Lean suites plus a CLI/system-`bzip2`
+    smoke matrix; CI now executes it.
+- [x] Add benchmarks on representative files (`scripts/bench.sh`: time + ratio
+  vs system `bzip2`, cross-decode verified both directions).
 - [ ] Add memory/performance notes by block size.
-- [ ] Add a compatibility matrix in README.
+- [x] Add a compatibility matrix in README.
+
+Encoder quality: the block coder now chooses 2–6 Huffman tables with bzip2-style
+iterative refinement and per-50-symbol selectors (`planEntropyCoding` in
+`Bzip2/Format/BZ2/Encoder.lean`), replacing the earlier degenerate
+two-identical-tables path. Output size is at parity with system bzip2 on text
+corpora (~99–103%).
 
 ## Phase 7: Final Acceptance Checklist
 
@@ -299,11 +322,19 @@ We are done only when all of these are true:
 
 ## Immediate Next Task
 
-Move from the landed fast forward BWT toward refinement and full large-file execution:
+The industry-standard CLI, multi-table encoder, provability refactors, and the
+first correctness proofs (bit-writer denotation, RUNA/RUNB digit round trip)
+are landed. The practical inverse-BWT / LF runtime path already exists
+(`Bzip2/Format/BZ2/InverseBWT.lean`, O(n) packed T-vector). The remaining work,
+in order:
 
-- keep the new practical fast forward BWT in the runtime path without deleting the current proved construction
-- keep the original BWT development as the reference semantics for proofs
-- prove the fast forward BWT refines the original BWT construction
-- add the matching practical inverse-BWT / LF runtime path where needed
-- broaden the large exact corpus beyond the current sparse-file baseline
-- then push the file API toward fully streaming large-file execution
+- finish the component round-trip proofs (Phase 5.2): RLE1, MTF/used-byte map,
+  selector MTF, canonical Huffman decode, and the reader-side positional bit
+  lemmas; these all sit under `Bzip2/Correctness/BZ2/`
+- assemble the block- and stream-level headline theorem
+  `compress? data = .ok out → decompress? out = .ok data` (Phase 5.2 / 7)
+- prove the reference BWT inversion in the origPtr/cyclic formalism (Phase 5.3)
+- prove the fast forward BWT refines the reference BWT (Phase 5.3); until then
+  it is runtime-validated by the encoder self-check plus the regression corpus
+- push the file API toward fully streaming large-file execution (Phase A5:
+  `BitWriter` drain, handle-backed `BitSource`, faster canonical decode)

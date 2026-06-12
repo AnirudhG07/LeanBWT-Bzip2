@@ -96,6 +96,41 @@ The codebase is now organized into four explicit layers:
 - Large-file exact support is still gated on further work: a broader fast native
   BWT / inverse-BWT path plus more practical large-block streaming behavior.
 
+## Command-Line Tool
+
+The repo builds a bzip2-compatible command-line binary:
+
+```bash
+lake build bzip2
+./.lake/build/bin/bzip2 --help
+```
+
+It follows the reference tool's semantics: in-place compression
+(`bzip2 file` → `file.bz2`, original removed), `-d` decompression with
+suffix-based naming (`.bz2`, `.bz`, `.tbz2`/`.tbz` → `.tar`), `-t` integrity
+testing, `-k`/`-f`/`-c`/`-q`/`-v`, block sizes `-1` through `-9`
+(default `-9`), clustered short flags (`-dkf9`), stdin/stdout filtering when
+no files are given, and bzip2 exit codes (0 ok, 1 environmental, 2 corrupt
+input, 3 internal error). Symlinking the binary as `bunzip2` or `bzcat` gives
+the usual aliased defaults.
+
+### Compatibility matrix
+
+| Capability | Status |
+| --- | --- |
+| Decompress files produced by Linux `bzip2` | ✅ |
+| Linux `bzip2 -t` / `bunzip2` accept our output | ✅ |
+| Block sizes `-1` … `-9` (both directions) | ✅ |
+| Concatenated `.bz2` streams (both directions) | ✅ |
+| Corrupt/malformed stream rejection with CRC checks | ✅ |
+| Deprecated randomised blocks | ❌ rejected on decode (never emitted by modern bzip2) |
+| File timestamp/ownership preservation | ❌ documented divergence (no portable Lean API) |
+| `BZIP2` environment variable | ❌ not consulted |
+| Compression ratio | ~99–103% of system bzip2 output size |
+| Speed | significantly slower than the C implementation (work ongoing) |
+
+Run `./scripts/bench.sh` for a current time/ratio table against system bzip2.
+
 ## Installation
 
 You can add this library as a dependency in `lakefile.toml` with:
@@ -216,7 +251,13 @@ def roundTripBytesWithBlockSize (input : ByteArray) : Except String ByteArray :=
 
 ## Testing
 
-You can run the tests in `tests/` with:
+Run the whole matrix (Lean suites plus CLI/system-bzip2 smoke tests) with:
+
+```bash
+./scripts/run_tests.sh
+```
+
+Individual suites in `tests/` can be run with:
 
 ```bash
 lake env lean --run tests/test_bzip2_<NAME>.lean

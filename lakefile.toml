@@ -9,7 +9,7 @@ name = "tests"
 
 [[lean_exe]]
 name = "bzip2"
-root = "Bzip2"
+root = "Main"
 
 [[require]]
 name = "mathlib"
