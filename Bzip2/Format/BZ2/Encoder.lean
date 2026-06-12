@@ -45,10 +45,10 @@ def streamConfig? (blockSizeDigit : Nat) : Except String StreamConfig := do
   else
     throw "Exact `.bz2` block size digit must be between 1 and 9."
 
-private def bitMaskAt (index : Nat) : Nat :=
+def bitMaskAt (index : Nat) : Nat :=
   2 ^ (15 - index)
 
-private def groupMask (group : Nat) (usedBytes : List UInt8) : Nat :=
+def groupMask (group : Nat) (usedBytes : List UInt8) : Nat :=
   (List.range 16).foldl
     (fun acc offset =>
       if UInt8.ofNat (group * 16 + offset) ∈ usedBytes then
@@ -57,7 +57,7 @@ private def groupMask (group : Nat) (usedBytes : List UInt8) : Nat :=
         acc)
     0
 
-private def groupsBitmap (usedBytes : List UInt8) : Nat :=
+def groupsBitmap (usedBytes : List UInt8) : Nat :=
   (List.range 16).foldl
     (fun acc group =>
       if groupMask group usedBytes = 0 then
@@ -66,20 +66,20 @@ private def groupsBitmap (usedBytes : List UInt8) : Nat :=
         acc + bitMaskAt group)
     0
 
-private def moveToFrontValue (value : Nat) (xs : List Nat) : Except String (Nat × List Nat) := do
+def moveToFrontValue (value : Nat) (xs : List Nat) : Except String (Nat × List Nat) := do
   let index := xs.findIdx (· = value)
   match xs[index]? with
   | none => throw "Exact `.bz2` selector MTF encoding lost a Huffman-group value."
   | some _ => pure (index, value :: xs.erase value)
 
-private def encodeSelectorsAux :
+def encodeSelectorsAux :
     List Nat → List Nat → List Nat → Except String (List Nat)
   | [], _, acc => pure acc.reverse
   | selector :: rest, mtf, acc => do
       let (encoded, mtf') ← moveToFrontValue selector mtf
       encodeSelectorsAux rest mtf' (encoded :: acc)
 
-private def encodeSelectors (groupCount : Nat) (selectors : List Nat) : Except String (List Nat) :=
+def encodeSelectors (groupCount : Nat) (selectors : List Nat) : Except String (List Nat) :=
   encodeSelectorsAux selectors (List.range groupCount) []
 
 /-- Least `bits` with `count ≤ 2 ^ bits`; the ceiling base-2 logarithm. -/
@@ -124,7 +124,7 @@ private def tableCodeLengths (alphaSize : Nat) (symbols : List Nat) : Except Str
     | .ok _ => pure lengths
     | .error _ => pure (fallbackCodeLengths alphaSize)
 
-private def writeUsedBytes (writer : BitWriter) (usedBytes : List UInt8) : BitWriter :=
+def writeUsedBytes (writer : BitWriter) (usedBytes : List UInt8) : BitWriter :=
   let writer := writer.writeBits 16 (groupsBitmap usedBytes)
   (List.range 16).foldl
     (fun writer group =>
@@ -132,11 +132,11 @@ private def writeUsedBytes (writer : BitWriter) (usedBytes : List UInt8) : BitWr
       if mask = 0 then writer else writer.writeBits 16 mask)
     writer
 
-private def writeUnaryZeroTerminated (writer : BitWriter) (count : Nat) : BitWriter :=
+def writeUnaryZeroTerminated (writer : BitWriter) (count : Nat) : BitWriter :=
   (writer.writeRepeatedBit count true).writeBit false
 
 /-- Emit the unary delta steps that move the running code length to `target`. -/
-private def writeLengthDelta (writer : BitWriter) (current target : Nat) : BitWriter :=
+def writeLengthDelta (writer : BitWriter) (current target : Nat) : BitWriter :=
   if current = target then
     writer
   else if target < current then
@@ -146,14 +146,14 @@ private def writeLengthDelta (writer : BitWriter) (current target : Nat) : BitWr
 termination_by (current - target) + (target - current)
 decreasing_by all_goals omega
 
-private def writeCodeLengthTableAux (current : Nat) :
+def writeCodeLengthTableAux (current : Nat) :
     List Nat → BitWriter → BitWriter
   | [], writer => writer
   | target :: rest, writer =>
       let writer := writeLengthDelta writer current target
       writeCodeLengthTableAux target rest (writer.writeBit false)
 
-private def writeCodeLengthTable (writer : BitWriter) (lengths : List Nat) : BitWriter :=
+def writeCodeLengthTable (writer : BitWriter) (lengths : List Nat) : BitWriter :=
   let startLength := lengths.headD 0
   writeCodeLengthTableAux startLength lengths (writer.writeBits 5 startLength)
 

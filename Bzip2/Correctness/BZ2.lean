@@ -3,6 +3,9 @@ import Bzip2.Correctness.BZ2.BitsReader
 import Bzip2.Correctness.BZ2.ZeroRun
 import Bzip2.Correctness.BZ2.RLE1
 import Bzip2.Correctness.BZ2.MtfRunaRunb
+import Bzip2.Correctness.BZ2.Selectors
+import Bzip2.Correctness.BZ2.CodeLengths
+import Bzip2.Correctness.BZ2.UsedBytes
 
 /-!
 # Bzip2.Correctness.BZ2

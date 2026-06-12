@@ -4,15 +4,17 @@ import Bzip2.Format.BZ2.Model
 /-!
 Exact `.bz2` metadata parser.
 
-This phase-1 parser intentionally stops after the Huffman metadata for a block.
-It does not yet decode the block contents themselves.
+This parser handles the per-block metadata (header, used-byte map, selectors,
+Huffman code-length tables). The block contents themselves (the MTF/RUNA-RUNB
+symbol stream and BWT inversion) are decoded by `Decoder.lean`, which consumes
+the `BitReader` left here.
 -/
 
 namespace Bzip2.Format.BZ2
 
 set_option autoImplicit false
 
-private def bitSetFromLeft (width value index : Nat) : Bool :=
+def bitSetFromLeft (width value index : Nat) : Bool :=
   ((value / (2 ^ (width - 1 - index))) % 2 = 1)
 
 /-- Parse the exact `BZh<digit>` stream header. -/
@@ -39,7 +41,7 @@ def parseSectionMarker (reader : BitReader) : Except String (SectionMarker × Bi
   else
     throw "Invalid `.bz2` section marker."
 
-private def parseUsedBytesAux :
+def parseUsedBytesAux :
     Nat → Nat → Nat → BitReader → List UInt8 → Except String (List UInt8 × BitReader)
   | 0, _, _, reader, acc => pure (acc, reader)
   | fuel + 1, group, groupsBitmap, reader, acc =>
@@ -75,12 +77,12 @@ def parseBlockHeaderAfterMagic (reader : BitReader) : Except String (BlockHeader
     , reader4
     )
 
-private def moveToFrontIndex (index : Nat) (xs : List Nat) : Except String (Nat × List Nat) :=
+def moveToFrontIndex (index : Nat) (xs : List Nat) : Except String (Nat × List Nat) :=
   match xs[index]? with
   | none => .error "Selector index is outside the Huffman-group range."
   | some value => .ok (value, value :: xs.erase value)
 
-private def parseUnaryIndexAux :
+def parseUnaryIndexAux :
     Nat → Nat → BitReader → Except String (Nat × BitReader)
   | 0, _, _ => .error "Unary selector encoding did not terminate."
   | fuel + 1, acc, reader => do
@@ -90,10 +92,10 @@ private def parseUnaryIndexAux :
       else
         pure (acc, reader')
 
-private def parseUnaryIndex (reader : BitReader) : Except String (Nat × BitReader) :=
+def parseUnaryIndex (reader : BitReader) : Except String (Nat × BitReader) :=
   parseUnaryIndexAux 64 0 reader
 
-private def parseSelectorsAux :
+def parseSelectorsAux :
     Nat → Nat → BitReader → List Nat → List Nat → Except String (List Nat × BitReader)
   | 0, _, reader, _, acc => pure (acc.reverse, reader)
   | count + 1, groupCount, reader, mtf, acc => do
@@ -103,7 +105,7 @@ private def parseSelectorsAux :
       let (selector, mtf') ← moveToFrontIndex encodedIndex mtf
       parseSelectorsAux count groupCount reader1 mtf' (selector :: acc)
 
-private def adjustCodeLength (current : Nat) (decrement : Bool) : Except String Nat := do
+def adjustCodeLength (current : Nat) (decrement : Bool) : Except String Nat := do
   if decrement then
     if current = 0 then
       throw "Huffman code length underflow."
@@ -114,7 +116,7 @@ private def adjustCodeLength (current : Nat) (decrement : Bool) : Except String 
   else
     pure (current + 1)
 
-private def parseOneLengthAux :
+def parseOneLengthAux :
     Nat → Nat → BitReader → Except String (Nat × BitReader)
   | 0, _, _ => .error "Huffman code-length delta sequence did not terminate."
   | fuel + 1, current, reader => do
@@ -126,14 +128,14 @@ private def parseOneLengthAux :
       else
         pure (current, reader1)
 
-private def parseTableCodeLengthsAux :
+def parseTableCodeLengthsAux :
     Nat → Nat → BitReader → List Nat → Except String (List Nat × BitReader)
   | 0, _, reader, acc => pure (acc.reverse, reader)
   | symCount + 1, current, reader, acc => do
       let (current', reader') ← parseOneLengthAux 64 current reader
       parseTableCodeLengthsAux symCount current' reader' (current' :: acc)
 
-private def parseTableCodeLengths (alphaSize : Nat) (reader : BitReader) :
+def parseTableCodeLengths (alphaSize : Nat) (reader : BitReader) :
     Except String (List Nat × BitReader) := do
   let (startLength, reader1) ← reader.readBits 5
   if startLength > 20 then

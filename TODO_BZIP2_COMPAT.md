@@ -15,6 +15,148 @@ We want all of the following to be true:
 - The new implementation is proved correct by refinement from the existing BWT
   basics and abstract correctness results.
 
+## Definition of Done — Master Checklist
+
+This is the single authoritative list. **The project is REALLY done — industry
+support, the industry implementation proved correct, everything — exactly when
+every box A1–F8 below is checked.** Each item is either done (`[x]`), or pending
+(`[ ]`) with the responsible proof/engineering phase noted. Nothing outside this
+list is required; nothing inside it may be skipped.
+
+### A. Industry-standard implementation & interoperability
+
+- [x] **A1.** Exact `.bz2` wire format: `BZh` stream header, 48-bit block /
+  end-of-stream magics, per-block CRC32 and combined stream CRC32, initial RLE1,
+  BWT + `origPtr`, MTF, RUNA/RUNB with end-of-block symbol, 16×16 used-byte
+  bitmap, 2–6 canonical Huffman tables, per-50-symbol selectors, exact MSB-first
+  bit packing.
+- [x] **A2.** Encoder output is validated (`bzip2 -t`) and decompressed by system
+  `bzip2`, byte-identical to the input.
+- [x] **A3.** Decoder reads system-`bzip2`-produced `.bz2` byte-identically.
+- [x] **A4.** Real multi-table Huffman encoder (2–6 tables, iterative
+  refinement) — competitive ratio vs system bzip2 (bench).
+- [x] **A5.** `bzip2`-compatible CLI: clustered flags, `-1..-9`, `-d/-z/-t/-k/-c/
+  -f/-q/-v/-s/-L/-V/--help/--`, exit codes 0/1/2/3, `bunzip2`/`bzcat` aliasing,
+  stdin/stdout filtering, suffix rules, permission copying.
+- [x] **A6.** Interop across block sizes 1–9, text and binary, concatenated
+  streams, corruption rejection, full 256-byte alphabet — all in the test suite.
+- [x] **A7.** Test driver + CI test execution + CLI smoke matrix + benchmark
+  script.
+- [ ] **A8.** Streaming / bounded memory: `BitWriter` backed by `ByteArray` with
+  a `drain`, handle-backed `BitSource` refilling in chunks, so encoder *and*
+  decoder memory stays ≈ one block independent of file size. (Phase A5 / 6.)
+- [ ] **A9.** Fast canonical Huffman decode via bzip2-style limit/base/perm
+  arrays; accumulator `ByteArray`s on hot decode paths. (Phase A5.)
+- [ ] **A10.** Opt-in large-file suite (`LEANBZIP2_RUN_LARGE=1`) green on
+  multi-megabyte inputs after A8.
+
+### B. Correctness — exact-format component round trips (bit-accurate)
+
+- [x] **B1.** Bit-writer denotation: `writeBit`/`writeBits`/`writeRepeatedBit`
+  append exactly the expected bits, with a preserved `WF` invariant.
+- [x] **B2.** Bit-reader positional denotation over `bitListOf`: `readBit_eq`,
+  `readBits_eq`, `readBits_of_prefix`, `readBit_of_prefix`.
+- [x] **B3.** Writer finalization bridge: `bitListOf (toByteArray w) = w.bits ++
+  padding`; fresh-reader entry point.
+- [x] **B4.** Initial RLE1 round trip (`decodeInitialRLE ∘ encodeInitialRLE`).
+- [x] **B5.** RUNA/RUNB zero-run digit round trip.
+- [x] **B6.** MTF + RUNA/RUNB payload round trip (last column ↔ symbol stream).
+- [x] **B7.** Selector move-to-front round trip (index level).
+- [ ] **B8.** Selector unary bit coding round trip
+  (`writeUnaryZeroTerminated` ↔ `parseUnaryIndex`), composed with B7 to give the
+  full on-the-wire selector round trip.
+- [x] **B9.** Huffman code-length delta-table round trip (5-bit start + per-symbol
+  unary delta walk).
+- [x] **B10.** Used-byte 16×16 bitmap round trip for a sorted-nodup alphabet.
+  - `Bzip2/Correctness/BZ2/UsedBytes.lean`, headline `parseUsedBytes_roundtrip`.
+  - Combinatorial heart: `testBit_add_of_disjoint` (disjoint add = bitwise-or),
+    `testBit_sum_two_pow` (a bit of a sum of distinct powers recovers
+    membership), and the mask characterizations `groupMask_bit` /
+    `groupsBitmap_bit`, plus 16-bit bounds.
+  - Parser side: `parseUsedBytesAux_spec` threads `writeUsedBytes`'s bits through
+    the 16 interleaved 16-bit mask reads via the `BitsReader` bridge, yielding the
+    per-group reconstruction; `reconstruct_eq` then shows the concatenated
+    per-group bytes equal the alphabet (a sorted-nodup list = the ascending byte
+    enumeration filtered by membership, via `sorted_nodup_ext`). `usedBytes` is
+    proved ascending + nodup (`usedBytes_pairwise`/`usedBytes_nodup`).
+- [ ] **B11.** Block-header field serialize/parse agreement: blockCRC (32),
+  `randomised`=0 (1), `origPtr` (24), Huffman group count (3), selector count
+  (15).
+- [ ] **B12.** Stream header (`BZh`+digit) and 48-bit section markers
+  serialize/parse agreement.
+- [ ] **B13.** Byte-alignment padding: the decoder's `alignToByte` provably
+  consumes exactly the `<8`-bit zero tail the encoder emits.
+
+### C. Canonical Huffman (Phase 5 / B3)
+
+- [ ] **C1.** Build spec as an inductive predicate (one entry per positive length,
+  consecutive codes, `firstCode(l+1) = 2·(firstCode(l)+count(l))`).
+- [ ] **C2.** Prefix-freeness from the interval invariant + not-overfull check.
+- [ ] **C3.** `decodeSymbol` correctness: `decode ∘ encode = id` per symbol
+  (fuel-induction, prefix-freeness kills early hits).
+- [ ] **C4.** `fallbackCodeLengths` always builds successfully.
+- [ ] **C5.** Trust boundary resolved: state explicitly that every property the
+  headline needs (build succeeded, all symbols have entries, lengths ≤ 20) is
+  dynamically checked on the encoder's `.ok` path — so the conditional headline
+  theorem needs **zero** facts about `LeanHuffmanCoding` — **or** internalize a
+  proved Huffman builder.
+
+### D. Block & stream assembly — the headline theorem (Phase 5 / B4–B5)
+
+- [ ] **D1.** Per-block agreement: decoding `encodeBlock block` recovers the block
+  (stitch B6–B13 + C3 per-symbol decode + selector/group bookkeeping for the
+  multi-table planner).
+- [ ] **D2.** Block CRC: the decoder's recomputed CRC32 equals the emitted one, so
+  a correctly-encoded block is never rejected (CRC determinism).
+- [ ] **D3.** **Headline round-trip theorem:**
+  `compress? data = .ok out → decompress? out = .ok data`.
+- [ ] **D4.** Generalizations: `compressWithBlockSize?` and `compressWithConfig?`
+  (every valid block size / entropy plan).
+- [ ] **D5.** Edge cases inside D3: empty input, single block, multi-block, the
+  end-of-stream marker, the trailing stream CRC, and padding consumption.
+
+### E. BWT refinement proofs (Phase 5.3 / B6–B7)
+
+- [ ] **E1.** Reference BWT inversion:
+  `inverseBWT (transformBWTReference x).lastColumn origPtr = .ok x`, proved in the
+  `origPtr`/cyclic formalism.
+- [ ] **E2.** Fast BWT refines reference: `transformFastBWT = transformBWTReference`.
+- [ ] **E3.** Fast inverse BWT agrees with the reference inverse where they
+  overlap (or is shown equal to the proved `inverseBWT`).
+- [ ] **E4.** Once E1–E3 land, the runtime BWT self-check in `encodeBlock` is
+  provably redundant; decide to keep it (defensive) or remove it, and record that
+  the headline no longer depends on it.
+
+### F. Trust, hygiene, finalization
+
+- [x] **F1.** Zero `sorry`/`admit` anywhere in `Bzip2/`.
+- [ ] **F2.** No `partial def` on any proof-relevant path. (Currently only two
+  IO-sink `partial def`s remain in `Decoder.lean`, off the pure proof path — keep
+  documented, or de-partialize.)
+- [ ] **F3.** `#print axioms` on the headline theorem (D3) shows no axioms beyond
+  the standard mathlib/Lean core set (no `sorryAx`, no project-specific axioms).
+- [ ] **F4.** Every `private` removed to enable proofs is either re-`private`d
+  behind a stable proof-facing interface or documented as public API.
+- [ ] **F5.** CI: builds the whole project, runs all test suites, and fails on any
+  `sorry` or build warning regression.
+- [ ] **F6.** README + this TODO reflect the final state; compatibility matrix and
+  proof-status table accurate.
+- [ ] **F7.** (Stretch, optional for "done") Decoder soundness for *arbitrary*
+  valid input: any stream system `bzip2` accepts, our `decompress?` decodes
+  identically — strictly stronger than the round trip; explicitly in- or
+  out-of-scope decided and recorded.
+- [ ] **F8.** Final sign-off: a single aggregated theorem (or documented theorem
+  list) that, taken together, states "this exact `.bz2` codec is correct," with a
+  one-paragraph English statement of exactly what is and isn't guaranteed.
+
+---
+
+**Progress at a glance:** A1–A7 ✓, A8–A10 pending · B1–B7, B9, B10 ✓, B8/B11–B13
+pending · C pending · D pending · E pending · F1 ✓, F2–F8 pending. The
+implementation and interop are essentially complete; the bulk of remaining work
+is the proof stack D (headline) with its prerequisites B8/B11–B13 + C, then the
+BWT refinement proofs E, then finalization F.
+
 ## Current State
 
 - [x] Abstract BWT, inverse BWT, MTF, and RLE pipeline proved correct.
@@ -56,34 +198,33 @@ not to delete or rewrite the original proof development.
 
 ## Main Gap
 
-The outer stream is now `.bz2`-like, but the inside of each block is still not
-real bzip2. The remaining work is to replace the current custom block body with
-the actual bzip2 block coding:
+**Status (updated):** the exact `.bz2` block coding is fully implemented and
+interoperates with system `bzip2`/`bunzip2` both directions (verified by the test
+suite across block sizes 1–9, text/binary, concatenated streams, and corruption
+rejection). The following are all DONE on the implementation side:
 
 - initial RLE1 before BWT
 - post-MTF RUNA/RUNB encoding
 - end-of-block symbol
-- 2 to 6 Huffman tables
+- 2 to 6 Huffman tables (multi-table entropy planner)
 - selector list for groups of 50 symbols
 - canonical Huffman code-length encoding
 - exact bit-level packing
+- a bzip2-compatible CLI (`lake exe bzip2`, with `bunzip2`/`bzcat` aliasing)
 
-## Recommended Order
+The remaining work is entirely on the **proof** side: completing the exact-layer
+correctness proofs (Phase 5) up to the headline round-trip theorem, plus the two
+BWT refinement proofs. See Phase 5 below for the live checklist.
 
-Do this in order:
+## Original Recommended Order (historical)
 
-1. Exact decoder for real `.bz2` blocks.
-2. Exact encoder for real `.bz2` blocks.
-3. Fast native BWT / inverse-BWT implementation for practical execution.
-4. Refinement proofs from abstract pipeline to real implementation.
-5. Large interoperability and regression test suite.
-
-Decoder-first is the right order because it gives us the exact wire-format model
-and lets us validate against system-produced `.bz2` files before we try to emit
-them.
-
-Now that exact `.bz2` interoperability is in place for practical small/medium
-inputs, the next scaling step is the fast native BWT layer.
+1. Exact decoder for real `.bz2` blocks. — done
+2. Exact encoder for real `.bz2` blocks. — done
+3. Fast native BWT / inverse-BWT implementation for practical execution. — done
+   (runtime-validated by the encoder BWT self-check; refinement proof pending)
+4. Refinement proofs from abstract pipeline to real implementation. — in progress
+   (Phase 5)
+5. Large interoperability and regression test suite. — done
 
 ## Phase 0: Freeze and Clean Boundaries
 
@@ -261,7 +402,16 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
     `mtfDecode_mtfEncode_of_nodup`.
 - [ ] Prove used-byte map decode(encode alphabet) = alphabet under validity
   conditions.
-- [ ] Prove selector MTF decode(encode selectors) = selectors.
+- [x] Prove selector MTF decode(encode selectors) = selectors.
+  - `decodeSelectors_encodeSelectors` in `Bzip2/Correctness/BZ2/Selectors.lean`:
+    a joint move-to-front induction shows the encoder's per-selector indices
+    decode back to the selectors, given each is a valid group index. (The unary
+    bit coding of the indices is handled separately by the `BitsReader` bridge.)
+- [x] Prove code-length delta-table decode(encode lengths) = lengths.
+  - `parseTableCodeLengths_of_prefix` + `writeCodeLengthTable_bits` in
+    `Bzip2/Correctness/BZ2/CodeLengths.lean`: the per-symbol unary delta walk
+    (`deltaBits`) round-trips at the bit level via `BitsReader`, lifted to the
+    full 5-bit-start + per-symbol table. Lengths assumed `≤ 20`.
 - [ ] Prove canonical Huffman decode(encode symbols) = symbols.
 - [x] Prove bit writer / bit reader roundtrip.
   - Writer side: `Bzip2/Correctness/BZ2/Bits.lean` gives `BitWriter` a

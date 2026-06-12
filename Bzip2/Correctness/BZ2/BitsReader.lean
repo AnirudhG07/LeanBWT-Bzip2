@@ -281,3 +281,19 @@ theorem ofByteArray_toByteArray_remaining (w : BitWriter) (h : w.WF) :
       = w.bits ++ List.replicate (if w.usedBits = 0 then 0 else 8 - w.usedBits) false := by
   simp only [BitReader.ofByteArray, List.drop_zero]
   exact bitListOf_toByteArray w h
+
+/-- Single-bit analogue of `readBits_of_prefix`: if the cursor bits begin with
+`b`, `readBit` returns `b` and advances one position. -/
+theorem readBit_of_prefix (r : BitReader) (b : Bool) (rest : List Bool)
+    (hpre : (bitListOf r.bytes).drop r.bitPos = b :: rest) :
+    r.readBit = .ok (b, { r with bitPos := r.bitPos + 1 })
+      ∧ (bitListOf r.bytes).drop (r.bitPos + 1) = rest := by
+  have hlen : r.bitPos < (bitListOf r.bytes).length := by
+    have h0 : 0 < ((bitListOf r.bytes).drop r.bitPos).length := by rw [hpre]; simp
+    rw [List.length_drop] at h0; omega
+  have hpos : r.bitPos < r.bytes.size * 8 := by rwa [← bitListOf_length]
+  have hcons := List.drop_eq_getElem_cons hlen
+  rw [hpre] at hcons
+  obtain ⟨hb, hrest⟩ := List.cons.inj hcons
+  refine ⟨?_, hrest.symm⟩
+  rw [readBit_eq r hpos, hb]
