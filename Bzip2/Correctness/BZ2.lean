@@ -6,6 +6,8 @@ import Bzip2.Correctness.BZ2.MtfRunaRunb
 import Bzip2.Correctness.BZ2.Selectors
 import Bzip2.Correctness.BZ2.CodeLengths
 import Bzip2.Correctness.BZ2.UsedBytes
+import Bzip2.Correctness.BZ2.SelectorBits
+import Bzip2.Correctness.BZ2.Headers
 
 /-!
 # Bzip2.Correctness.BZ2

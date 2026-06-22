@@ -14,9 +14,9 @@ root = "Main"
 [[require]]
 name = "mathlib"
 scope = "leanprover-community"
-rev = "v4.29.0"
+rev = "v4.31.0"
 
 [[require]]
 name = "huffman"
 git = "https://github.com/AnirudhG07/LeanHuffmanCoding.git"
-rev = "783017d2dc1e2cbc8d4d5ff9f533a74e2a7b9125"
+rev = "82acb4cfbe7deffbba3c110b188286a527429b63"

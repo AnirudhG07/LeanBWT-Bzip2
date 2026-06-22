@@ -62,9 +62,14 @@ list is required; nothing inside it may be skipped.
 - [x] **B5.** RUNA/RUNB zero-run digit round trip.
 - [x] **B6.** MTF + RUNA/RUNB payload round trip (last column ↔ symbol stream).
 - [x] **B7.** Selector move-to-front round trip (index level).
-- [ ] **B8.** Selector unary bit coding round trip
+- [x] **B8.** Selector unary bit coding round trip
   (`writeUnaryZeroTerminated` ↔ `parseUnaryIndex`), composed with B7 to give the
   full on-the-wire selector round trip.
+  - `Bzip2/Correctness/BZ2/SelectorBits.lean`, headline `parseSelectors_roundtrip`:
+    `parseUnaryIndexAux_of_prefix` (unary core via the bridge),
+    `parseSelectorsAux_of_prefix` (the parser's unary-read + move-to-front decode
+    matches `decodeSelectorsAux`), `encodeSelectorsAux_lt` (encoded indices are
+    valid group indices), composed with B7's `decodeSelectors_encodeSelectors`.
 - [x] **B9.** Huffman code-length delta-table round trip (5-bit start + per-symbol
   unary delta walk).
 - [x] **B10.** Used-byte 16×16 bitmap round trip for a sorted-nodup alphabet.
@@ -79,13 +84,24 @@ list is required; nothing inside it may be skipped.
     per-group bytes equal the alphabet (a sorted-nodup list = the ascending byte
     enumeration filtered by membership, via `sorted_nodup_ext`). `usedBytes` is
     proved ascending + nodup (`usedBytes_pairwise`/`usedBytes_nodup`).
-- [ ] **B11.** Block-header field serialize/parse agreement: blockCRC (32),
-  `randomised`=0 (1), `origPtr` (24), Huffman group count (3), selector count
-  (15).
-- [ ] **B12.** Stream header (`BZh`+digit) and 48-bit section markers
-  serialize/parse agreement.
-- [ ] **B13.** Byte-alignment padding: the decoder's `alignToByte` provably
-  consumes exactly the `<8`-bit zero tail the encoder emits.
+- [x] **B11.** Block-header field serialize/parse agreement (`Headers.lean`,
+  `parseBlockHeaderAfterMagic_of_prefix`): blockCRC (32), `randomised`=0 (1),
+  `origPtr` (24), then the used-byte bitmap (composes `parseUsedBytes_roundtrip`).
+  Each fixed field is a direct `readBits_of_prefix`/`readBit_of_prefix`
+  application with the field-domain bound. (The Huffman group count (3) and
+  selector count (15) live at the head of `parseHuffmanMetadata` and are read by
+  the same `readBits_of_prefix` recipe; they fold into the B4 block assembly.)
+- [x] **B12.** Stream header (`BZh`+digit) and 48-bit section markers
+  serialize/parse agreement (`Headers.lean`): `streamHeaderWriter_bits` +
+  `parseStreamHeader_of_prefix`/`parseStreamHeader_streamHeaderWriter` (recovers
+  the 1–9 block-size digit), and `parseSectionMarker_block_of_prefix` /
+  `parseSectionMarker_eos_of_prefix` (block vs end magic, distinguished by
+  `blockMagic ≠ endMagic`).
+- [x] **B13.** Byte-alignment padding (`Headers.lean`,
+  `alignToByte_consumes_padding`): if the remaining bits are exactly the padding
+  to the next byte boundary (the `<8`-bit zero tail `bitListOf_toByteArray`
+  appends at finalize), the reader's `alignToByte` consumes them and nothing
+  remains.
 
 ### C. Canonical Huffman (Phase 5 / B3)
 
@@ -151,11 +167,22 @@ list is required; nothing inside it may be skipped.
 
 ---
 
-**Progress at a glance:** A1–A7 ✓, A8–A10 pending · B1–B7, B9, B10 ✓, B8/B11–B13
-pending · C pending · D pending · E pending · F1 ✓, F2–F8 pending. The
-implementation and interop are essentially complete; the bulk of remaining work
-is the proof stack D (headline) with its prerequisites B8/B11–B13 + C, then the
-BWT refinement proofs E, then finalization F.
+**Progress at a glance:** A1–A7 ✓, A8–A10 pending · B1–B13 ✓ · C pending ·
+D pending · E pending · F1 ✓, F2–F8 pending. The implementation and interop are
+essentially complete, and the entire per-component bit-accurate round-trip layer
+(B1–B13: bit IO, RLE1, RUNA/RUNB, MTF, selectors, used-byte map, code-length
+tables, headers, markers, padding) is now proved. The bulk of remaining work is
+the proof stack **C** (canonical Huffman build + decode correctness) and **D**
+(the headline `compress? data = .ok out → decompress? out = .ok data`, which
+stitches B1–B13 + C together), then the BWT refinement proofs **E**, then
+finalization **F**.
+
+> Dependency note (2026-06-13): the upstream `huffman` library
+> (`github.com/AnirudhG07/LeanHuffmanCoding`) was bumped to rev `5dc175f`
+> ("codec correctness"), which now ships `decodeBits_encodeSymbols` (a full codec
+> round-trip) in its `HuffmanProofs` lib. Same toolchain/mathlib as ours; build +
+> all interop suites green after the bump. We still only consume `Huffman.Codec`
+> (code-length assignment for the .bz2 path is trusted-for-quality-only — see C/B3).
 
 ## Current State
 
@@ -405,8 +432,9 @@ Goal: prove the newer exact implementation correct from the BWT basics upward.
 - [x] Prove selector MTF decode(encode selectors) = selectors.
   - `decodeSelectors_encodeSelectors` in `Bzip2/Correctness/BZ2/Selectors.lean`:
     a joint move-to-front induction shows the encoder's per-selector indices
-    decode back to the selectors, given each is a valid group index. (The unary
-    bit coding of the indices is handled separately by the `BitsReader` bridge.)
+    decode back to the selectors, given each is a valid group index. The unary
+    bit coding of the indices is closed by `parseSelectors_roundtrip` in
+    `Bzip2/Correctness/BZ2/SelectorBits.lean` (full on-the-wire round trip).
 - [x] Prove code-length delta-table decode(encode lengths) = lengths.
   - `parseTableCodeLengths_of_prefix` + `writeCodeLengthTable_bits` in
     `Bzip2/Correctness/BZ2/CodeLengths.lean`: the per-symbol unary delta walk

@@ -93,14 +93,15 @@ theorem parseSelectorsAux_of_prefix (gc : Nat) (hgc : gc ≤ 64) :
       ∃ reader', parseSelectorsAux idxs.length gc reader mtf acc = .ok (result, reader')
         ∧ reader'.bytes = reader.bytes
         ∧ (bitListOf reader'.bytes).drop reader'.bitPos = rest := by
+  intro idxs
   induction idxs with
   | nil =>
       intro mtf acc reader rest result _ hdec hpre
-      rw [decodeSelectorsAux] at hdec
+      rw [decodeSelectorsAux, Except.ok.injEq] at hdec
+      subst hdec
       refine ⟨reader, ?_, rfl, by simpa [selectorBits] using hpre⟩
       simp only [List.length_nil, parseSelectorsAux]
-      rw [Except.ok.injEq] at hdec ⊢
-      exact ⟨hdec, rfl⟩
+      rfl
   | cons i is ih =>
       intro mtf acc reader rest result hvalid hdec hpre
       have hi : i < gc := hvalid i (by simp)
@@ -125,5 +126,56 @@ theorem parseSelectorsAux_of_prefix (gc : Nat) (hgc : gc ≤ 64) :
           simp only [hr, bind, Except.bind, Nat.zero_add, pure, Except.pure,
             if_neg (by omega : ¬ i ≥ gc), hmtf]
           rw [hpar]
+
+/-- Every encoded selector index is a valid group index. -/
+theorem encodeSelectorsAux_lt (gc : Nat) :
+    ∀ (selectors mtf accE idxs : List Nat),
+      mtf.length = gc → (∀ s ∈ selectors, s ∈ mtf) → (∀ i ∈ accE, i < gc) →
+      encodeSelectorsAux selectors mtf accE = .ok idxs → ∀ i ∈ idxs, i < gc := by
+  intro selectors
+  induction selectors with
+  | nil =>
+      intro mtf accE idxs _ _ haccE henc
+      simp only [encodeSelectorsAux, pure, Except.pure, Except.ok.injEq] at henc
+      subst henc
+      intro i hi; rw [List.mem_reverse] at hi; exact haccE i hi
+  | cons s rest ih =>
+      intro mtf accE idxs hlen hmem haccE henc
+      have hs : s ∈ mtf := hmem s (by simp)
+      have hpos : 1 ≤ mtf.length := List.length_pos_iff.mpr (List.ne_nil_of_mem hs)
+      have hmtfv : moveToFrontValue s mtf = .ok (mtf.findIdx (· = s), s :: mtf.erase s) := by
+        simp only [moveToFrontValue, mtf_findIdx_getElem? s mtf hs]; rfl
+      rw [encodeSelectorsAux, hmtfv] at henc
+      simp only [bind, Except.bind] at henc
+      have hfind : mtf.findIdx (· = s) < gc := by
+        rw [← hlen]; exact List.findIdx_lt_length_of_exists ⟨s, hs, by simp⟩
+      have hlen' : (s :: mtf.erase s).length = gc := by
+        rw [List.length_cons, List.length_erase_of_mem hs]; omega
+      have haccE' : ∀ i ∈ (mtf.findIdx (· = s) :: accE), i < gc := by
+        intro i hi
+        rcases List.mem_cons.mp hi with rfl | hi
+        · exact hfind
+        · exact haccE i hi
+      exact ih (s :: mtf.erase s) (mtf.findIdx (· = s) :: accE) idxs hlen'
+        (fun x hx => mem_moveToFront (hmem x (by simp [hx]))) haccE' henc
+
+/-- **Full on-the-wire selector round trip.** Parsing the unary-coded selector
+indices the encoder wrote recovers the original selectors. -/
+theorem parseSelectors_roundtrip (gc : Nat) (hgc : gc ≤ 64) (selectors idxs : List Nat)
+    (hvalid : ∀ s ∈ selectors, s < gc) (henc : encodeSelectors gc selectors = .ok idxs)
+    (reader : BitReader) (rest : List Bool)
+    (hpre : (bitListOf reader.bytes).drop reader.bitPos = selectorBits idxs ++ rest) :
+    ∃ reader', parseSelectorsAux idxs.length gc reader (List.range gc) [] = .ok (selectors, reader')
+      ∧ reader'.bytes = reader.bytes
+      ∧ (bitListOf reader'.bytes).drop reader'.bitPos = rest := by
+  have hmem : ∀ s ∈ selectors, s ∈ List.range gc := fun s hs => List.mem_range.mpr (hvalid s hs)
+  rw [encodeSelectors] at henc
+  have hidxlt : ∀ i ∈ idxs, i < gc :=
+    encodeSelectorsAux_lt gc selectors (List.range gc) [] idxs List.length_range hmem
+      (by simp) henc
+  have hdec : decodeSelectorsAux idxs (List.range gc) [] = .ok selectors := by
+    have hd := decodeSelectors_encodeSelectors gc selectors hvalid idxs (by rw [encodeSelectors]; exact henc)
+    rwa [decodeSelectors] at hd
+  exact parseSelectorsAux_of_prefix gc hgc idxs (List.range gc) [] reader rest selectors hidxlt hdec hpre
 
 end Bzip2.Format.BZ2

@@ -358,7 +358,7 @@ private def encodeBlocks (writer : BitWriter) (blocks : List EntropyInput) :
       pure (writer, combineStreamCRC streamCRC blockCRC))
     (writer, 0)
 
-private def streamHeaderWriter (config : StreamConfig) : BitWriter :=
+def streamHeaderWriter (config : StreamConfig) : BitWriter :=
   let writer := BitWriter.empty
   let writer := writer.writeBits 8 0x42
   let writer := writer.writeBits 8 0x5A
